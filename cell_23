@@ -1,6 +1,7 @@
 # ==========================================================
 # CELL 23 — GRAPH-GROUNDED DOCUMENT RETRIEVAL
-#           Ranked KG evidence → Document nodes → Content
+#           KG Nodes / Graph Evidence -> Documents
+#           Fetch actual document content
 # ==========================================================
 
 print("=" * 80)
@@ -8,50 +9,93 @@ print("GRAPH-GROUNDED DOCUMENT RETRIEVAL")
 print("=" * 80)
 
 
-# ----------------------------------------------------------
-# 0. Guards
-# ----------------------------------------------------------
+# ==========================================================
+# 1. VALIDATE REQUIRED VARIABLES
+# ==========================================================
 
 for _name in (
-    "ranked_edges",
-    "graph_evidence_df",
     "g",
     "docs",
+    "seeds",
+    "ranked_edges",
     "EX",
     "RDFS",
-    "node_label",
-    "node_ref"
+    "RDF",
+    "node_label"
 ):
     assert _name in globals(), \
-        f"{_name} is not defined. Run Cells 14, 18 and 22 first."
+        f"{_name} is not defined. Run the previous cells first."
 
 
-# ----------------------------------------------------------
-# 1. Build document lookup by sourceReference
+# ==========================================================
+# 2. BUILD DOCUMENT INDEX
 #
-#    This allows a title-only entity/link node to resolve
-#    back to the actual document node.
-# ----------------------------------------------------------
+# Each document has:
+#
+#     rdf:type            -> ex:Document
+#     rdfs:label          -> document title
+#     ex:sourceReference  -> original reference
+#     ex:documentContent  -> full document text
+# ==========================================================
 
 documents_by_reference = defaultdict(list)
+documents_by_title = defaultdict(list)
 
-for doc in docs:
+for doc_uri in docs:
 
-    ref = g.value(
-        doc,
+    # ------------------------------------------
+    # Reference index
+    # ------------------------------------------
+
+    source_reference = g.value(
+        doc_uri,
         EX.sourceReference
     )
 
-    if ref is not None:
+    if source_reference is not None:
 
         documents_by_reference[
-            str(ref)
-        ].append(doc)
+            str(source_reference).strip()
+        ].append(doc_uri)
+
+    # ------------------------------------------
+    # Title index
+    # ------------------------------------------
+
+    document_label = g.value(
+        doc_uri,
+        RDFS.label
+    )
+
+    if document_label is not None:
+
+        documents_by_title[
+            str(document_label).strip().lower()
+        ].append(doc_uri)
 
 
-# ----------------------------------------------------------
-# 2. Helper — get document content
-# ----------------------------------------------------------
+print()
+print("DOCUMENT INDEX")
+print("-" * 80)
+
+print(
+    f"Document nodes       : {len(docs)}"
+)
+
+print(
+    f"Reference index size : "
+    f"{len(documents_by_reference)}"
+)
+
+print(
+    f"Title index size     : "
+    f"{len(documents_by_title)}"
+)
+
+
+# ==========================================================
+# 3. HELPER — GET DOCUMENT CONTENT
+# ==========================================================
 
 def get_document_content(doc_uri):
 
@@ -66,114 +110,278 @@ def get_document_content(doc_uri):
     return str(content)
 
 
-# ----------------------------------------------------------
-# 3. Helper — resolve any KG node to documents
+# ==========================================================
+# 4. HELPER — RESOLVE A KG NODE TO DOCUMENT(S)
 #
-#    Case A:
-#        Node itself is a document.
+# A node can resolve to a document in several ways:
 #
-#    Case B:
-#        Node is an entity/title-only node.
-#        Use its reference to find the corresponding
-#        document node.
-# ----------------------------------------------------------
+#   A. Node itself is a Document
+#   B. Node has targetReference
+#   C. Node has sourceReference
+#   D. Node label matches a document title
+# ==========================================================
 
 def resolve_node_to_documents(node_uri):
 
     node_uri = URIRef(node_uri)
 
-    resolved_docs = []
-
-
-    # ------------------------------------------------------
-    # Case A — node itself is a document
-    # ------------------------------------------------------
-
-    if node_uri in docs:
-
-        if get_document_content(node_uri):
-
-            resolved_docs.append({
-                "document": node_uri,
-                "resolution": "direct_document"
-            })
-
+    resolved = {}
 
     # ------------------------------------------------------
-    # Case B — title/entity node
+    # A. NODE ITSELF IS A DOCUMENT
     # ------------------------------------------------------
 
-    else:
+    if (
+        node_uri,
+        RDF.type,
+        EX.Document
+    ) in g:
 
-        ref = g.value(
-            node_uri,
-            EX.sourceReference
+        content = get_document_content(
+            node_uri
         )
 
-        if ref is None:
+        if content:
 
-            ref = g.value(
-                node_uri,
-                EX.targetReference
-            )
-
-
-        if ref is not None:
-
-            matching_docs = documents_by_reference.get(
-                str(ref),
-                []
-            )
-
-            for doc_uri in matching_docs:
-
-                if get_document_content(doc_uri):
-
-                    resolved_docs.append({
-                        "document": doc_uri,
-                        "resolution": "reference_to_document"
-                    })
+            resolved[node_uri] = {
+                "document": node_uri,
+                "resolution": "direct_document"
+            }
 
 
-    return resolved_docs
+    # ------------------------------------------------------
+    # B. TARGET REFERENCE
+    # ------------------------------------------------------
+
+    target_reference = g.value(
+        node_uri,
+        EX.targetReference
+    )
+
+    if target_reference is not None:
+
+        reference = str(
+            target_reference
+        ).strip()
+
+        for doc_uri in documents_by_reference.get(
+            reference,
+            []
+        ):
+
+            if get_document_content(doc_uri):
+
+                resolved[doc_uri] = {
+                    "document": doc_uri,
+                    "resolution": "target_reference"
+                }
 
 
-# ----------------------------------------------------------
-# 4. Retrieve documents from ranked graph evidence
-# ----------------------------------------------------------
+    # ------------------------------------------------------
+    # C. SOURCE REFERENCE
+    # ------------------------------------------------------
 
-document_candidates = {}
+    source_reference = g.value(
+        node_uri,
+        EX.sourceReference
+    )
 
-for edge in ranked_edges:
+    if source_reference is not None:
 
-    target = edge["target"]
+        reference = str(
+            source_reference
+        ).strip()
 
-    resolved = resolve_node_to_documents(
-        target
+        for doc_uri in documents_by_reference.get(
+            reference,
+            []
+        ):
+
+            if get_document_content(doc_uri):
+
+                resolved[doc_uri] = {
+                    "document": doc_uri,
+                    "resolution": "source_reference"
+                }
+
+
+    # ------------------------------------------------------
+    # D. TITLE MATCH
+    # ------------------------------------------------------
+
+    node_title = g.value(
+        node_uri,
+        RDFS.label
+    )
+
+    if node_title is not None:
+
+        title = str(
+            node_title
+        ).strip().lower()
+
+        for doc_uri in documents_by_title.get(
+            title,
+            []
+        ):
+
+            if get_document_content(doc_uri):
+
+                resolved[doc_uri] = {
+                    "document": doc_uri,
+                    "resolution": "title_match"
+                }
+
+
+    return list(
+        resolved.values()
     )
 
 
-    for item in resolved:
+# ==========================================================
+# 5. DOCUMENT CANDIDATES
+# ==========================================================
+
+document_candidates = {}
+
+
+# ==========================================================
+# 6. FIRST — ADD DOCUMENTS REPRESENTED BY THE SEEDS
+#
+# Example:
+#
+# Query
+#   ↓
+# Service Operation
+#   ↓
+# Service Operation document
+#
+# The seed itself can therefore be a retrieved document.
+# ==========================================================
+
+for seed in seeds:
+
+    seed_uri = URIRef(
+        seed["node"]
+    )
+
+    resolved_documents = (
+        resolve_node_to_documents(
+            seed_uri
+        )
+    )
+
+    for item in resolved_documents:
 
         doc_uri = item["document"]
 
+        candidate = {
 
-        # --------------------------------------------------
-        # Keep the strongest graph evidence for each document
-        # --------------------------------------------------
+            "document": doc_uri,
 
-        graph_score = float(
-            edge["graph_score"]
+            "document_label": str(
+                g.value(
+                    doc_uri,
+                    RDFS.label
+                )
+                or doc_uri
+            ),
+
+            "reference": str(
+                g.value(
+                    doc_uri,
+                    EX.sourceReference
+                )
+                or ""
+            ),
+
+            "content": get_document_content(
+                doc_uri
+            ),
+
+            # Seed score is the initial graph evidence.
+            "graph_score": float(
+                seed["score"]
+            ),
+
+            "hop": 0,
+
+            "root_seed": seed_uri,
+
+            "evidence_source": seed_uri,
+
+            "evidence_target": seed_uri,
+
+            "predicate": None,
+
+            "edge_strength": 0.0,
+
+            "resolution": (
+                "seed_"
+                + item["resolution"]
+            )
+        }
+
+        document_candidates[
+            doc_uri
+        ] = candidate
+
+
+# ==========================================================
+# 7. SECOND — ADD DOCUMENTS FROM GRAPH TRAVERSAL
+#
+# For every ranked relationship:
+#
+#     source ──predicate──> target
+#
+# check BOTH source and target nodes.
+#
+# This allows:
+#
+# Seed
+#   ↓
+# Node A
+#   ↓
+# Node B
+#   ↓
+# Document B
+#
+# to resolve correctly.
+# ==========================================================
+
+for edge in ranked_edges:
+
+    graph_score = float(
+        edge["graph_score"]
+    )
+
+    nodes_to_check = [
+
+        (
+            edge["source"],
+            "source"
+        ),
+
+        (
+            edge["target"],
+            "target"
         )
 
+    ]
 
-        if (
-            doc_uri not in document_candidates
-            or graph_score >
-               document_candidates[doc_uri]["graph_score"]
-        ):
+    for node_uri, node_role in nodes_to_check:
 
-            document_candidates[doc_uri] = {
+        resolved_documents = (
+            resolve_node_to_documents(
+                node_uri
+            )
+        )
+
+        for item in resolved_documents:
+
+            doc_uri = item["document"]
+
+            candidate = {
 
                 "document": doc_uri,
 
@@ -199,28 +407,65 @@ for edge in ranked_edges:
 
                 "graph_score": graph_score,
 
-                "hop": edge["hop"],
+                "hop": int(
+                    edge["hop"]
+                ),
 
-                "root_seed": edge["root_seed"],
+                "root_seed": edge[
+                    "root_seed"
+                ],
 
-                "evidence_source": edge["source"],
+                "evidence_source": edge[
+                    "source"
+                ],
 
-                "evidence_target": edge["target"],
+                "evidence_target": edge[
+                    "target"
+                ],
 
-                "predicate": edge["predicate"],
+                "predicate": edge[
+                    "predicate"
+                ],
 
-                "edge_strength": edge["strength"],
+                "edge_strength": float(
+                    edge["strength"]
+                ),
 
-                "resolution": item["resolution"]
+                "resolution": (
+                    node_role
+                    + "_"
+                    + item["resolution"]
+                )
             }
 
+            # --------------------------------------------------
+            # If the same document is reached multiple times,
+            # keep the strongest graph evidence.
+            # --------------------------------------------------
 
-# ----------------------------------------------------------
-# 5. Sort documents by strongest graph evidence
-# ----------------------------------------------------------
+            if (
+                doc_uri not in document_candidates
+                or
+                candidate["graph_score"]
+                >
+                document_candidates[
+                    doc_uri
+                ]["graph_score"]
+            ):
+
+                document_candidates[
+                    doc_uri
+                ] = candidate
+
+
+# ==========================================================
+# 8. SORT DOCUMENTS
+# ==========================================================
 
 retrieved_documents = sorted(
+
     document_candidates.values(),
+
     key=lambda x: (
         -x["graph_score"],
         x["hop"],
@@ -229,21 +474,34 @@ retrieved_documents = sorted(
 )
 
 
-# ----------------------------------------------------------
-# 6. Display summary
-# ----------------------------------------------------------
+# ==========================================================
+# 9. SUMMARY
+# ==========================================================
 
 print()
-print(f"Ranked graph edges        : {len(ranked_edges)}")
+print("=" * 80)
+print("DOCUMENT RETRIEVAL SUMMARY")
+print("=" * 80)
+
+print(
+    f"Seeds                    : "
+    f"{len(seeds)}"
+)
+
+print(
+    f"Ranked graph edges       : "
+    f"{len(ranked_edges)}"
+)
+
 print(
     f"Unique documents retrieved: "
     f"{len(retrieved_documents)}"
 )
 
 
-# ----------------------------------------------------------
-# 7. Display retrieved documents
-# ----------------------------------------------------------
+# ==========================================================
+# 10. DISPLAY RETRIEVED DOCUMENTS
+# ==========================================================
 
 if retrieved_documents:
 
@@ -252,56 +510,62 @@ if retrieved_documents:
         {
             "rank": i + 1,
 
-            "document": d["document_label"],
+            "document":
+                d["document_label"],
 
-            "graph_score": round(
-                d["graph_score"],
-                6
-            ),
+            "graph_score":
+                round(
+                    d["graph_score"],
+                    6
+                ),
 
-            "hop": d["hop"],
+            "hop":
+                d["hop"],
 
-            "root_seed": node_label.get(
-                d["root_seed"],
-                str(d["root_seed"])
-            ),
+            "root_seed":
+                node_label.get(
+                    d["root_seed"],
+                    str(d["root_seed"])
+                ),
 
-            "evidence_source": node_label.get(
-                d["evidence_source"],
-                str(d["evidence_source"])
-            ),
+            "evidence_source":
+                node_label.get(
+                    d["evidence_source"],
+                    str(d["evidence_source"])
+                ),
 
-            "evidence_target": node_label.get(
-                d["evidence_target"],
-                str(d["evidence_target"])
-            ),
+            "evidence_target":
+                node_label.get(
+                    d["evidence_target"],
+                    str(d["evidence_target"])
+                ),
 
-            "predicate": str(
-                d["predicate"]
-            ).rsplit("/", 1)[-1],
+            "predicate":
+                (
+                    str(
+                        d["predicate"]
+                    ).rsplit("/", 1)[-1]
+                    if d["predicate"]
+                    else "-"
+                ),
 
-            "edge_strength": d[
-                "edge_strength"
-            ],
+            "edge_strength":
+                d["edge_strength"],
 
-            "resolution": d[
-                "resolution"
-            ],
+            "resolution":
+                d["resolution"],
 
-            "reference": d[
-                "reference"
-            ],
-
-            "content_chars": len(
-                d["content"] or ""
-            )
+            "content_chars":
+                len(
+                    d["content"] or ""
+                )
         }
 
         for i, d in enumerate(
             retrieved_documents
         )
-    ])
 
+    ])
 
     print()
     print("RETRIEVED DOCUMENTS")
@@ -325,23 +589,22 @@ if retrieved_documents:
         ].head(50)
     )
 
-
 else:
 
     document_df = pd.DataFrame()
 
     print()
     print(
-        "⚠️ No documents could be resolved "
-        "from the ranked graph evidence."
+        "⚠️ No documents were retrieved."
     )
 
 
-# ----------------------------------------------------------
-# 8. Show a sample of actual document content
-# ----------------------------------------------------------
+# ==========================================================
+# 11. DISPLAY ACTUAL DOCUMENT CONTENT
+# ==========================================================
 
 print()
+print("=" * 80)
 print("SAMPLE RETRIEVED DOCUMENT CONTENT")
 print("=" * 80)
 
@@ -371,6 +634,11 @@ for i, doc in enumerate(
         f"{doc['resolution']}"
     )
 
+    print(
+        f"Characters  : "
+        f"{len(doc['content'] or '')}"
+    )
+
     print("-" * 80)
 
     content = doc["content"] or ""
@@ -380,8 +648,13 @@ for i, doc in enumerate(
     )
 
     if len(content) > 1500:
-        print("\n...[content truncated for display]...")
+
+        print(
+            "\n...[content truncated for display]..."
+        )
 
 
 print()
-print("✅ Graph-grounded document retrieval completed.")
+print(
+    "✅ Graph-grounded document retrieval completed."
+)
