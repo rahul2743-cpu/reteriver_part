@@ -1,0 +1,166 @@
+# ==========================================================
+# GENERIC CELL — VISUALIZE GRAPH TRAVERSAL USING PYVIS
+# ==========================================================
+
+from pyvis.network import Network
+from IPython.display import display, HTML
+
+# ----------------------------------------------------------
+# 1. Validate Cell 21 output
+# ----------------------------------------------------------
+
+assert "reached_nodes" in globals(), \
+    "reached_nodes not found. Run Cell 21 first."
+
+assert "all_edges" in globals(), \
+    "all_edges not found. Run Cell 21 first."
+
+
+# ----------------------------------------------------------
+# 2. Create PyVis graph
+# ----------------------------------------------------------
+
+net = Network(
+    height="750px",
+    width="100%",
+    directed=True,
+    notebook=True
+)
+
+
+# ----------------------------------------------------------
+# 3. Add nodes
+# ----------------------------------------------------------
+
+for node_uri, info in reached_nodes.items():
+
+    node_id = str(node_uri)
+
+    # Use KG label if available
+    label = str(
+        info.get("label")
+        or node_uri
+    )
+
+    hop = info.get("hop", 0)
+    graph_score = info.get("graph_score", 0.0)
+
+    # Information shown when hovering
+    title = (
+        f"<b>Label:</b> {label}<br>"
+        f"<b>Hop:</b> {hop}<br>"
+        f"<b>Graph Score:</b> {graph_score:.4f}"
+    )
+
+    # Generic visualization properties
+    if hop == 0:
+        shape = "star"
+        size = 30
+    else:
+        shape = "dot"
+        size = 20
+
+    net.add_node(
+        node_id,
+        label=label,
+        title=title,
+        shape=shape,
+        size=size
+    )
+
+
+# ----------------------------------------------------------
+# 4. Add edges
+# ----------------------------------------------------------
+
+for edge in all_edges:
+
+    source = str(edge["source"])
+    target = str(edge["target"])
+
+    predicate = str(
+        edge.get("predicate", "")
+    )
+
+    strength = edge.get("strength", "")
+    hop = edge.get("hop", "")
+    graph_score = edge.get("graph_score", 0.0)
+
+    title = (
+        f"<b>Predicate:</b> {predicate}<br>"
+        f"<b>Strength:</b> {strength}<br>"
+        f"<b>Hop:</b> {hop}<br>"
+        f"<b>Graph Score:</b> {graph_score:.4f}"
+    )
+
+    net.add_edge(
+        source,
+        target,
+        label=predicate,
+        title=title,
+        arrows="to"
+    )
+
+
+# ----------------------------------------------------------
+# 5. Configure graph layout
+# ----------------------------------------------------------
+
+net.set_options("""
+{
+  "physics": {
+    "enabled": true,
+    "stabilization": {
+      "iterations": 200
+    },
+    "barnesHut": {
+      "gravitationalConstant": -3000,
+      "centralGravity": 0.2,
+      "springLength": 180,
+      "springConstant": 0.04,
+      "damping": 0.09
+    }
+  },
+
+  "interaction": {
+    "hover": true,
+    "navigationButtons": true,
+    "keyboard": true
+  },
+
+  "edges": {
+    "arrows": {
+      "to": {
+        "enabled": true
+      }
+    },
+    "smooth": {
+      "enabled": true
+    }
+  }
+}
+""")
+
+
+# ----------------------------------------------------------
+# 6. Save and display
+# ----------------------------------------------------------
+
+output_file = "graph_traversal.html"
+
+net.save_graph(output_file)
+
+display(HTML(output_file))
+
+
+# ----------------------------------------------------------
+# 7. Summary
+# ----------------------------------------------------------
+
+print("=" * 60)
+print("GRAPH TRAVERSAL VISUALIZATION")
+print("=" * 60)
+print(f"Nodes visualized : {len(reached_nodes)}")
+print(f"Edges visualized : {len(all_edges)}")
+print(f"Output file      : {output_file}")
+print("=" * 60)
