@@ -1,0 +1,104 @@
+# ==========================================================
+# CELL 17 — QUERY PREPROCESSING
+# ==========================================================
+
+import re
+
+print("=" * 80)
+print("QUERY PREPROCESSING")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# Guard: the question is set in Cell 16 as `query`
+# ----------------------------------------------------------
+
+assert "query" in globals() and query.strip(), \
+    "query is not defined. Run Cell 16 first."
+
+# ----------------------------------------------------------
+# Words that carry no meaning for matching KG nodes
+# ----------------------------------------------------------
+
+STOP_WORDS = set("""
+a an the of in on at to for from by with and or is are was were be been s
+what which who whom whose how why when where does do did meant mean means
+context about into as it its this that these those can could should would
+""".split())
+
+
+def normalize_text(text):
+
+    text = str(text).lower()
+
+    text = text.replace("_", " ")
+    text = text.replace("-", " ")
+
+    text = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+def tokenize(text):
+    """Normalized words without stop words (also used for node titles)."""
+    return [
+        t for t in normalize_text(text).split()
+        if t not in STOP_WORDS
+    ]
+
+
+def preprocess_query(query):
+
+    normalized = normalize_text(query)
+
+    tokens = normalized.split()
+
+    keywords = [t for t in tokens if t not in STOP_WORDS]
+
+    phrases = [
+        " ".join(pair)
+        for pair in zip(keywords, keywords[1:])
+    ]
+
+    return {
+        "original_query":   query,
+        "normalized_query": normalized,
+        "tokens":           tokens,
+        "keywords":         keywords,
+        "phrases":          phrases
+    }
+
+
+query_info = preprocess_query(query)
+
+print("Original:")
+print(query_info["original_query"])
+
+print()
+
+print("Normalized:")
+print(query_info["normalized_query"])
+
+print()
+
+print("Tokens:")
+print(query_info["tokens"])
+
+print()
+
+print("Keywords (stop words removed):")
+print(query_info["keywords"])
+
+print()
+
+print("Phrases:")
+print(query_info["phrases"])
