@@ -1,0 +1,23 @@
+# ==========================================================
+# CELL 16 — USER QUERY
+# ==========================================================
+
+print("=" * 80)
+print("USER QUERY")
+print("=" * 80)
+
+query = """
+What is meant by service operation
+in the context of Rolls-Royce product?
+"""
+
+# one clean line: removes line breaks and repeated spaces
+query = " ".join(query.split())
+
+assert query, "Query is empty."
+
+print("QUERY:")
+print(query)
+print()
+print(f"Characters : {len(query)}")
+print(f"Words      : {len(query.split())}")
