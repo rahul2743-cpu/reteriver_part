@@ -1,0 +1,359 @@
+# ==========================================================
+# CELL 22 — GRAPH EVIDENCE RANKING
+#           Rank relationships discovered by Cell 21
+# ==========================================================
+
+import math
+from collections import defaultdict
+
+print("=" * 80)
+print("GRAPH EVIDENCE RANKING")
+print("=" * 80)
+
+
+# ----------------------------------------------------------
+# 0. Guards
+# ----------------------------------------------------------
+
+for _name in (
+    "traversed_edges",
+    "seeds",
+    "HOP_DECAY",
+    "node_label",
+    "g",
+    "RDF"
+):
+    assert _name in globals(), \
+        f"{_name} is not defined. Run previous cells first."
+
+
+# ----------------------------------------------------------
+# 1. Seed relevance lookup
+#
+#    Cell 20 selected the final seeds.
+#    Each seed already has a query-matching score.
+# ----------------------------------------------------------
+
+seed_scores = {}
+
+for seed in seeds:
+
+    seed_uri = URIRef(seed["node"])
+
+    seed_scores[seed_uri] = float(
+        seed["score"]
+    )
+
+
+# ----------------------------------------------------------
+# 2. Calculate outgoing degree of every KG node
+#
+#    Degree = number of outgoing relationships.
+#
+#    This is only a graph-connectivity signal.
+# ----------------------------------------------------------
+
+out_degree = defaultdict(int)
+
+for stmt in g.subjects(
+    RDF.type,
+    RDF.Statement
+):
+
+    source = g.value(
+        stmt,
+        RDF.subject
+    )
+
+    if source is not None:
+        out_degree[source] += 1
+
+
+# ----------------------------------------------------------
+# 3. Rank every discovered relationship
+#
+#    Formula:
+#
+#    graph_score =
+#
+#        seed_score
+#        × hop_decay
+#        × normalized_edge_strength
+#        × degree_factor
+#
+# ----------------------------------------------------------
+
+ranked_edges = []
+
+
+for edge in traversed_edges:
+
+    # ------------------------------------------------------
+    # Original seed responsible for this evidence
+    # ------------------------------------------------------
+
+    root_seed = edge["root_seed"]
+
+    seed_score = seed_scores.get(
+        root_seed,
+        0.0
+    )
+
+
+    # ------------------------------------------------------
+    # Hop decay
+    #
+    # Hop 1 → 1.00
+    # Hop 2 → HOP_DECAY (0.45)
+    # ------------------------------------------------------
+
+    hop = int(edge["hop"])
+
+    hop_decay = (
+        HOP_DECAY ** (hop - 1)
+    )
+
+
+    # ------------------------------------------------------
+    # Normalize RDF edge strength
+    #
+    # KG strength is expected to be 1–10.
+    # ------------------------------------------------------
+
+    edge_strength = float(
+        edge["strength"]
+    )
+
+    normalized_strength = min(
+        edge_strength / 10.0,
+        1.0
+    )
+
+
+    # ------------------------------------------------------
+    # Target node connectivity
+    # ------------------------------------------------------
+
+    target = edge["target"]
+
+    target_degree = out_degree.get(
+        target,
+        0
+    )
+
+
+    # Log prevents highly connected nodes from dominating.
+    degree_factor = (
+        1.0 + math.log1p(target_degree)
+    )
+
+
+    # ------------------------------------------------------
+    # Final graph evidence score
+    # ------------------------------------------------------
+
+    graph_score = (
+        seed_score
+        * hop_decay
+        * normalized_strength
+        * degree_factor
+    )
+
+
+    ranked_edges.append({
+
+        "hop": hop,
+
+        "root_seed": root_seed,
+
+        "source": edge["source"],
+
+        "target": target,
+
+        "predicate": edge["predicate"],
+
+        "strength": edge_strength,
+
+        "seed_score": round(
+            seed_score,
+            4
+        ),
+
+        "hop_decay": round(
+            hop_decay,
+            4
+        ),
+
+        "normalized_strength": round(
+            normalized_strength,
+            4
+        ),
+
+        "target_degree": target_degree,
+
+        "degree_factor": round(
+            degree_factor,
+            4
+        ),
+
+        "graph_score": round(
+            graph_score,
+            6
+        ),
+
+        "link_type": edge["link_type"],
+
+        "description": edge["description"]
+    })
+
+
+# ----------------------------------------------------------
+# 4. Sort strongest graph evidence first
+# ----------------------------------------------------------
+
+ranked_edges.sort(
+    key=lambda x: (
+        -x["graph_score"],
+        x["hop"],
+        -x["strength"]
+    )
+)
+
+
+# ----------------------------------------------------------
+# 5. Create DataFrame
+# ----------------------------------------------------------
+
+if ranked_edges:
+
+    graph_evidence_df = pd.DataFrame([
+
+        {
+            "rank": i + 1,
+
+            "hop": edge["hop"],
+
+            "root_seed": node_label.get(
+                edge["root_seed"],
+                str(edge["root_seed"])
+            ),
+
+            "source": node_label.get(
+                edge["source"],
+                str(edge["source"])
+            ),
+
+            "predicate": str(
+                edge["predicate"]
+            ).rsplit("/", 1)[-1],
+
+            "target": node_label.get(
+                edge["target"],
+                str(edge["target"])
+            ),
+
+            "strength": edge["strength"],
+
+            "seed_score": edge["seed_score"],
+
+            "hop_decay": edge["hop_decay"],
+
+            "normalized_strength": edge[
+                "normalized_strength"
+            ],
+
+            "target_degree": edge[
+                "target_degree"
+            ],
+
+            "degree_factor": edge[
+                "degree_factor"
+            ],
+
+            "graph_score": edge[
+                "graph_score"
+            ],
+
+            "link_type": edge[
+                "link_type"
+            ]
+        }
+
+        for i, edge in enumerate(
+            ranked_edges
+        )
+    ])
+
+
+# ----------------------------------------------------------
+# 6. Display results
+# ----------------------------------------------------------
+
+print()
+print(f"Traversed edges    : {len(traversed_edges)}")
+print(f"Ranked edges       : {len(ranked_edges)}")
+
+
+if ranked_edges:
+
+    print()
+    print("TOP GRAPH EVIDENCE")
+    print("-" * 80)
+
+    display(
+        graph_evidence_df[
+            [
+                "rank",
+                "hop",
+                "root_seed",
+                "source",
+                "predicate",
+                "target",
+                "strength",
+                "seed_score",
+                "hop_decay",
+                "normalized_strength",
+                "target_degree",
+                "graph_score"
+            ]
+        ].head(50)
+    )
+
+else:
+
+    graph_evidence_df = pd.DataFrame()
+
+    print()
+    print(
+        "⚠️ No graph evidence was discovered."
+    )
+
+
+# ----------------------------------------------------------
+# 7. Summary by hop
+# ----------------------------------------------------------
+
+print()
+print("HOP SUMMARY")
+print("-" * 80)
+
+for hop in sorted(
+    set(
+        edge["hop"]
+        for edge in ranked_edges
+    )
+):
+
+    count = sum(
+        1
+        for edge in ranked_edges
+        if edge["hop"] == hop
+    )
+
+    print(
+        f"Hop {hop}: {count} ranked edges"
+    )
+
+
+print()
+print("✅ Graph evidence ranking completed.")
