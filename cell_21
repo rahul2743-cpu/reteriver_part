@@ -1,0 +1,396 @@
+# ==========================================================
+# CELL 21 — SPARQL OUTGOING GRAPH TRAVERSAL
+#           Seed → Hop 1 → Hop 2
+# ==========================================================
+
+print("=" * 80)
+print("SPARQL OUTGOING GRAPH TRAVERSAL")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# 0. Guards
+# ----------------------------------------------------------
+
+for _name in (
+    "seeds",
+    "g",
+    "PREFIXES",
+    "MAX_HOPS",
+    "MAX_FRONTIER",
+    "MAX_EDGES",
+    "MIN_EDGE_STRENGTH",
+    "node_label"
+):
+    assert _name in globals(), \
+        f"{_name} is not defined. Run the previous cells first."
+
+
+# ----------------------------------------------------------
+# 1. SPARQL query
+#
+#    IMPORTANT:
+#    This retrieves ONLY outgoing relationships:
+#
+#        rdf:subject = current node
+#        rdf:object  = next node
+#
+#    No reverse / incoming traversal is performed.
+# ----------------------------------------------------------
+
+OUTGOING_QUERY = PREFIXES + """
+
+SELECT
+    ?source
+    ?predicate
+    ?target
+    ?strength
+    ?linkType
+    ?description
+
+WHERE {
+
+    ?stmt a rdf:Statement ;
+
+          rdf:subject   ?source ;
+
+          rdf:predicate ?predicate ;
+
+          rdf:object    ?target ;
+
+          ex:strength   ?strength ;
+
+          ex:linkType   ?linkType ;
+
+          ex:description ?description .
+
+    FILTER (?source = <SOURCE_URI>)
+
+}
+"""
+
+
+# ----------------------------------------------------------
+# 2. Helper: retrieve outgoing edges for one node
+# ----------------------------------------------------------
+
+def get_outgoing_edges(source_uri):
+
+    query = OUTGOING_QUERY.replace(
+        "<SOURCE_URI>",
+        str(source_uri)
+    )
+
+    rows = list(g.query(query))
+
+    edges = []
+
+    for row in rows:
+
+        try:
+            strength = float(row.strength)
+        except (TypeError, ValueError):
+            strength = 1.0
+
+        if strength < MIN_EDGE_STRENGTH:
+            continue
+
+        edges.append({
+            "source": URIRef(row.source),
+            "target": URIRef(row.target),
+            "predicate": URIRef(row.predicate),
+            "strength": strength,
+            "link_type": str(row.linkType),
+            "description": str(row.description)
+        })
+
+    return edges
+
+
+# ----------------------------------------------------------
+# 3. Initialize traversal
+# ----------------------------------------------------------
+
+visited = set()
+
+frontier = set()
+
+root_seed = {}
+
+for seed in seeds:
+
+    uri = URIRef(seed["node"])
+
+    frontier.add(uri)
+
+    root_seed[uri] = uri
+
+
+# ----------------------------------------------------------
+# 4. Traverse hop by hop
+# ----------------------------------------------------------
+
+traversed_edges = []
+
+hop_nodes = {
+    0: set(frontier)
+}
+
+
+print()
+print("INITIAL SEEDS")
+print("-" * 80)
+
+for i, seed in enumerate(seeds, start=1):
+
+    print(
+        f"{i}. {seed['label']} "
+        f"(score={seed['score']:.4f})"
+    )
+
+
+for hop in range(1, MAX_HOPS + 1):
+
+    print()
+    print("=" * 80)
+    print(f"HOP {hop}")
+    print("=" * 80)
+
+    if not frontier:
+
+        print("Frontier is empty. Traversal stopped.")
+        break
+
+
+    next_candidates = []
+
+    # ------------------------------------------------------
+    # Expand ONLY current frontier
+    #
+    # This guarantees:
+    #
+    # Seed → Hop 1 → Hop 2
+    #
+    # and prevents jumping back to the original seed
+    # during Hop 2.
+    # ------------------------------------------------------
+
+    for source in frontier:
+
+        if len(traversed_edges) >= MAX_EDGES:
+            break
+
+        outgoing = get_outgoing_edges(source)
+
+        for edge in outgoing:
+
+            if len(traversed_edges) >= MAX_EDGES:
+                break
+
+            target = edge["target"]
+
+            # ----------------------------------------------
+            # Avoid revisiting an already expanded node
+            # ----------------------------------------------
+
+            if target in visited:
+                continue
+
+            # ----------------------------------------------
+            # Preserve which original seed led here
+            # ----------------------------------------------
+
+            edge["hop"] = hop
+            edge["root_seed"] = root_seed[source]
+
+            next_candidates.append(edge)
+
+
+    # ------------------------------------------------------
+    # Mark current frontier as visited
+    # ------------------------------------------------------
+
+    visited.update(frontier)
+
+
+    # ------------------------------------------------------
+    # Remove duplicate targets
+    #
+    # Keep the strongest incoming evidence for each target.
+    # ------------------------------------------------------
+
+    best_by_target = {}
+
+    for edge in next_candidates:
+
+        target = edge["target"]
+
+        if (
+            target not in best_by_target
+            or edge["strength"] >
+               best_by_target[target]["strength"]
+        ):
+            best_by_target[target] = edge
+
+
+    next_candidates = list(
+        best_by_target.values()
+    )
+
+
+    # ------------------------------------------------------
+    # Rank candidates before MAX_FRONTIER
+    #
+    # This is important:
+    # we do NOT arbitrarily truncate the frontier.
+    # Stronger graph evidence gets priority.
+    # ------------------------------------------------------
+
+    next_candidates.sort(
+        key=lambda e: -e["strength"]
+    )
+
+
+    # ------------------------------------------------------
+    # Keep only the strongest MAX_FRONTIER nodes
+    # ------------------------------------------------------
+
+    next_candidates = next_candidates[:MAX_FRONTIER]
+
+
+    # ------------------------------------------------------
+    # Save edges and prepare next frontier
+    # ------------------------------------------------------
+
+    traversed_edges.extend(next_candidates)
+
+    frontier = {
+        edge["target"]
+        for edge in next_candidates
+    }
+
+    hop_nodes[hop] = set(frontier)
+
+
+    # ------------------------------------------------------
+    # Print hop summary
+    # ------------------------------------------------------
+
+    print(f"Nodes expanded        : {len(hop_nodes[hop - 1])}")
+    print(f"New edges discovered   : {len(next_candidates)}")
+    print(f"Next frontier size     : {len(frontier)}")
+
+    if next_candidates:
+
+        print()
+        print("Sample discovered relationships:")
+
+        for edge in next_candidates[:10]:
+
+            source_label = node_label.get(
+                edge["source"],
+                str(edge["source"])
+            )
+
+            target_label = node_label.get(
+                edge["target"],
+                str(edge["target"])
+            )
+
+            predicate_label = str(
+                edge["predicate"]
+            ).rsplit("/", 1)[-1]
+
+            print(
+                f"  {source_label}"
+                f" --[{predicate_label}]--> "
+                f"{target_label}"
+                f" | strength={edge['strength']}"
+            )
+
+    else:
+
+        print("No new outgoing relationships found.")
+
+
+# ----------------------------------------------------------
+# 5. Final traversal summary
+# ----------------------------------------------------------
+
+print()
+print("=" * 80)
+print("TRAVERSAL SUMMARY")
+print("=" * 80)
+
+print(f"Seeds                  : {len(seeds)}")
+print(f"Maximum hops           : {MAX_HOPS}")
+print(f"Maximum frontier       : {MAX_FRONTIER}")
+print(f"Maximum edges          : {MAX_EDGES}")
+print(f"Edges collected        : {len(traversed_edges)}")
+
+for hop in sorted(hop_nodes):
+
+    print(
+        f"Hop {hop} nodes           : "
+        f"{len(hop_nodes[hop])}"
+    )
+
+
+# ----------------------------------------------------------
+# 6. Build traversal DataFrame
+# ----------------------------------------------------------
+
+if traversed_edges:
+
+    traversal_df = pd.DataFrame([
+        {
+            "hop": edge["hop"],
+            "root_seed": node_label.get(
+                edge["root_seed"],
+                str(edge["root_seed"])
+            ),
+            "source": node_label.get(
+                edge["source"],
+                str(edge["source"])
+            ),
+            "predicate": str(
+                edge["predicate"]
+            ).rsplit("/", 1)[-1],
+            "target": node_label.get(
+                edge["target"],
+                str(edge["target"])
+            ),
+            "strength": edge["strength"],
+            "link_type": edge["link_type"],
+            "description": edge["description"]
+        }
+        for edge in traversed_edges
+    ])
+
+    print()
+    print("TRAVERSAL EDGES")
+    print("-" * 80)
+
+    display(
+        traversal_df[
+            [
+                "hop",
+                "root_seed",
+                "source",
+                "predicate",
+                "target",
+                "strength",
+                "link_type"
+            ]
+        ].head(50)
+    )
+
+else:
+
+    traversal_df = pd.DataFrame()
+
+    print()
+    print("⚠️ No outgoing graph relationships were discovered.")
+
+
+print()
+print("✅ Outgoing SPARQL traversal completed.")
