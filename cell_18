@@ -1,0 +1,177 @@
+# ==========================================================
+# CELL 18 — BUILD KG NODE INDEX  (labels + text + BM25)
+# ==========================================================
+
+print("=" * 80)
+print("BUILDING KG NODE INDEX")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# 0. Guards: cells this one depends on
+# ----------------------------------------------------------
+
+for _name in ("g", "docs", "ents", "PREFIXES", "normalize_text",
+              "tokenize", "TITLE_WEIGHT", "LEAD_WORDS"):
+    assert _name in globals(), \
+        f"{_name} is not defined. Run Cells 13, 14 and 17 first."
+
+
+# ----------------------------------------------------------
+# 1. Retrieve KG nodes that have an rdfs:label
+#
+#    NOTE: predicates ALSO carry rdfs:label in g (Cell 11), so the
+#    query keeps only ex:Document / ex:Entity subjects. DISTINCT
+#    stops a node with BOTH types from appearing twice.
+# ----------------------------------------------------------
+
+LABEL_QUERY = PREFIXES + """
+
+SELECT DISTINCT
+    ?node
+    ?label
+
+WHERE {
+
+    ?node a ?type ;
+          rdfs:label ?label .
+
+    FILTER (?type IN (ex:Document, ex:Entity))
+
+}
+"""
+
+label_rows = list(
+    g.query(LABEL_QUERY)
+)
+
+
+# ----------------------------------------------------------
+# 2. Build searchable node index
+# ----------------------------------------------------------
+
+node_index = pd.DataFrame([
+    {
+        "node":  str(row.node),
+        "label": str(row.label)
+    }
+    for row in label_rows
+])
+
+assert not node_index.empty, \
+    "No labeled KG nodes found."
+
+node_index = (
+    node_index
+    .sort_values("node")
+    .reset_index(drop=True)
+)
+
+node_index["normalized_label"] = (
+    node_index["label"]
+    .apply(normalize_text)
+)
+
+
+# ----------------------------------------------------------
+# 3. Per-node dictionaries used by later cells
+#    (keys are rdflib URIRefs, same as the traversal uses)
+# ----------------------------------------------------------
+
+node_uris    = [URIRef(n) for n in node_index["node"]]
+node_label   = dict(zip(node_uris, node_index["label"]))
+node_content = {}
+node_ref     = {}    # reference id -> used later to fetch text of title-only nodes
+
+for uri in node_uris:
+
+    content = g.value(uri, EX.documentContent)
+    if content:
+        node_content[uri] = str(content)
+
+    ref = g.value(uri, EX.sourceReference) or g.value(uri, EX.targetReference)
+    node_ref[uri] = str(ref) if ref else None
+
+node_index["node_type"] = [
+    "document" if u in docs else "entity" for u in node_uris
+]
+node_index["has_text"]  = [u in node_content for u in node_uris]
+node_index["reference"] = [node_ref[u] for u in node_uris]
+
+
+# ----------------------------------------------------------
+# 4. BM25 over node title (+ first words of the page)
+# ----------------------------------------------------------
+
+class BM25:
+
+    def __init__(self, docs_tokens, k1=1.5, b=0.75):
+        self.k1, self.b = k1, b
+        self.docs = docs_tokens
+        self.N = len(docs_tokens)
+        self.avgdl = (sum(len(d) for d in docs_tokens) / self.N) if self.N else 0
+
+        df = defaultdict(int)
+        for d in docs_tokens:
+            for t in set(d):
+                df[t] += 1
+
+        self.idf = {
+            t: math.log(1 + (self.N - n + 0.5) / (n + 0.5))
+            for t, n in df.items()
+        }
+
+        self.tf = []
+        for d in docs_tokens:
+            f = defaultdict(int)
+            for t in d:
+                f[t] += 1
+            self.tf.append(f)
+
+    def scores(self, q_tokens):
+        out = []
+        for f, d in zip(self.tf, self.docs):
+            s, dl = 0.0, len(d)
+            for t in set(q_tokens):
+                if t in f:
+                    denom = f[t] + self.k1 * (1 - self.b + self.b * dl / (self.avgdl or 1))
+                    s += self.idf.get(t, 0) * f[t] * (self.k1 + 1) / denom
+            out.append(s)
+        return out
+
+
+def node_search_tokens(uri):
+    lead = " ".join(node_content.get(uri, "").split()[:LEAD_WORDS])
+    return tokenize(node_label[uri]) * TITLE_WEIGHT + tokenize(lead)
+
+
+node_bm25 = BM25([node_search_tokens(u) for u in node_uris])
+
+
+# ----------------------------------------------------------
+# 5. Validation + summary
+# ----------------------------------------------------------
+
+n_expected = len(docs | ents)
+
+assert len(node_index) == n_expected, (
+    f"Indexed {len(node_index)} nodes but Cell 14 found {n_expected}. "
+    "Some nodes have no rdfs:label."
+)
+
+print(f"KG nodes indexed           : {len(node_index)}")
+print(f"  document nodes           : {(node_index.node_type == 'document').sum()}")
+print(f"  entity nodes             : {(node_index.node_type == 'entity').sum()}")
+print(f"  with text                : {node_index.has_text.sum()}")
+print(f"  title only               : {(~node_index.has_text).sum()}")
+print(f"Nodes without reference id : {node_index.reference.isna().sum()}")
+
+print()
+print("Sample KG nodes:")
+display(
+    node_index[
+        ["label", "normalized_label", "node_type", "has_text", "reference"]
+    ].head(20)
+)
+
+print()
+print("✅ KG node index built successfully.")
