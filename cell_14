@@ -1,0 +1,121 @@
+# ==========================================================
+# CELL 14 — VERIFY EXISTING RDF KNOWLEDGE GRAPH
+# ==========================================================
+
+print("=" * 80)
+print("RDF KNOWLEDGE GRAPH CHECK")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# 1. Basic graph check
+# ----------------------------------------------------------
+
+print(f"Total RDF triples : {len(g)}")
+
+assert len(g) > 0, "RDF Knowledge Graph is empty."
+
+
+# ----------------------------------------------------------
+# 2. Identify important node types
+# ----------------------------------------------------------
+
+docs = set(
+    g.subjects(RDF.type, EX.Document)
+)
+
+ents = set(
+    g.subjects(RDF.type, EX.Entity)
+)
+
+stmts = list(
+    g.subjects(RDF.type, RDF.Statement)
+)
+
+print(f"Document nodes                  : {len(docs)}")
+print(f"Entity nodes                    : {len(ents)}")
+print(f"Relationships (reified)         : {len(stmts)}")
+
+
+# ----------------------------------------------------------
+# 3. Check document nodes that are relationship targets
+# ----------------------------------------------------------
+
+document_targets = set(
+    g.objects(None, RDF.object)
+).intersection(docs)
+
+print(f"Document nodes used as targets  : {len(document_targets)}")
+
+
+# ----------------------------------------------------------
+# 3b. Which nodes carry text, and do all nodes have labels?
+# ----------------------------------------------------------
+
+docs_with_text = {
+    d for d in docs
+    if (d, EX.documentContent, None) in g
+}
+
+nodes_no_label = [
+    n for n in (docs | ents)
+    if (n, RDFS.label, None) not in g
+]
+
+print(f"Document nodes WITH content     : {len(docs_with_text)}")
+print(f"Entity-only nodes (title only)  : {len(ents - docs)}")
+print(f"Nodes without rdfs:label        : {len(nodes_no_label)}")
+
+
+# ----------------------------------------------------------
+# 4. Required KG structure
+# ----------------------------------------------------------
+
+assert docs, \
+    "No ex:Document nodes found. Run the RDF generation cell first."
+
+assert stmts, \
+    "No reified relationships found. Run the RDF generation cell first."
+
+assert not nodes_no_label, \
+    "Some nodes have no rdfs:label. Node matching needs titles."
+
+
+# ----------------------------------------------------------
+# 5. Verify relationship metadata
+# ----------------------------------------------------------
+
+missing = []
+
+for stmt in stmts:
+
+    if (stmt, RDF.subject, None) not in g:
+        missing.append((stmt, "rdf:subject"))
+
+    elif (stmt, RDF.predicate, None) not in g:
+        missing.append((stmt, "rdf:predicate"))
+
+    elif (stmt, RDF.object, None) not in g:
+        missing.append((stmt, "rdf:object"))
+
+    elif (stmt, EX.strength, None) not in g:
+        missing.append((stmt, "ex:strength"))
+
+    elif (stmt, EX.description, None) not in g:
+        missing.append((stmt, "ex:description"))
+
+    elif (stmt, EX.linkType, None) not in g:
+        missing.append((stmt, "ex:linkType"))
+
+
+print(f"Relationship structure problems : {len(missing)}")
+
+assert not missing, \
+    "Some relationships are missing required traversal metadata."
+
+
+# ----------------------------------------------------------
+# 6. Final status
+# ----------------------------------------------------------
+
+print()
+print("✅ RDF Knowledge Graph is ready for retrieval.")
