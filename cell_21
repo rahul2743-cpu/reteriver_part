@@ -7,6 +7,7 @@ print("=" * 80)
 print("SPARQL OUTGOING GRAPH TRAVERSAL")
 print("=" * 80)
 
+
 # ----------------------------------------------------------
 # 0. Guards
 # ----------------------------------------------------------
@@ -28,13 +29,10 @@ for _name in (
 # ----------------------------------------------------------
 # 1. SPARQL query
 #
-#    IMPORTANT:
-#    This retrieves ONLY outgoing relationships:
+#    The source node is supplied using RDFLib's
+#    initBindings().
 #
-#        rdf:subject = current node
-#        rdf:object  = next node
-#
-#    No reverse / incoming traversal is performed.
+#    Therefore we do NOT insert the URI into the query.
 # ----------------------------------------------------------
 
 OUTGOING_QUERY = PREFIXES + """
@@ -51,36 +49,35 @@ WHERE {
 
     ?stmt a rdf:Statement ;
 
-          rdf:subject   ?source ;
+          rdf:subject    ?source ;
 
-          rdf:predicate ?predicate ;
+          rdf:predicate  ?predicate ;
 
-          rdf:object    ?target ;
+          rdf:object     ?target ;
 
-          ex:strength   ?strength ;
+          ex:strength    ?strength ;
 
-          ex:linkType   ?linkType ;
+          ex:linkType    ?linkType ;
 
           ex:description ?description .
-
-    FILTER (?source = <SOURCE_URI>)
-
 }
 """
 
 
 # ----------------------------------------------------------
-# 2. Helper: retrieve outgoing edges for one node
+# 2. Get outgoing edges for ONE source node
 # ----------------------------------------------------------
 
 def get_outgoing_edges(source_uri):
 
-    query = OUTGOING_QUERY.replace(
-        "<SOURCE_URI>",
-        str(source_uri)
+    rows = list(
+        g.query(
+            OUTGOING_QUERY,
+            initBindings={
+                "source": URIRef(source_uri)
+            }
+        )
     )
-
-    rows = list(g.query(query))
 
     edges = []
 
@@ -116,25 +113,31 @@ frontier = set()
 
 root_seed = {}
 
+
 for seed in seeds:
 
     uri = URIRef(seed["node"])
 
     frontier.add(uri)
 
+    # Each seed is its own root seed
     root_seed[uri] = uri
 
 
 # ----------------------------------------------------------
-# 4. Traverse hop by hop
+# 4. Store nodes discovered at every hop
 # ----------------------------------------------------------
-
-traversed_edges = []
 
 hop_nodes = {
     0: set(frontier)
 }
 
+traversed_edges = []
+
+
+# ----------------------------------------------------------
+# 5. Print initial seeds
+# ----------------------------------------------------------
 
 print()
 print("INITIAL SEEDS")
@@ -148,6 +151,10 @@ for i, seed in enumerate(seeds, start=1):
     )
 
 
+# ----------------------------------------------------------
+# 6. HOP-BY-HOP OUTGOING TRAVERSAL
+# ----------------------------------------------------------
+
 for hop in range(1, MAX_HOPS + 1):
 
     print()
@@ -155,6 +162,7 @@ for hop in range(1, MAX_HOPS + 1):
     print(f"HOP {hop}")
     print("=" * 80)
 
+    # Nothing left to expand
     if not frontier:
 
         print("Frontier is empty. Traversal stopped.")
@@ -163,15 +171,17 @@ for hop in range(1, MAX_HOPS + 1):
 
     next_candidates = []
 
+
     # ------------------------------------------------------
-    # Expand ONLY current frontier
+    # Expand ONLY the current frontier
     #
-    # This guarantees:
+    # Hop 1:
+    #     Seed → neighbors
     #
-    # Seed → Hop 1 → Hop 2
+    # Hop 2:
+    #     Hop-1 nodes → neighbors
     #
-    # and prevents jumping back to the original seed
-    # during Hop 2.
+    # We never restart from the original seed.
     # ------------------------------------------------------
 
     for source in frontier:
@@ -181,25 +191,30 @@ for hop in range(1, MAX_HOPS + 1):
 
         outgoing = get_outgoing_edges(source)
 
+
         for edge in outgoing:
 
             if len(traversed_edges) >= MAX_EDGES:
                 break
 
+
             target = edge["target"]
 
-            # ----------------------------------------------
-            # Avoid revisiting an already expanded node
-            # ----------------------------------------------
+
+            # --------------------------------------------------
+            # Don't expand nodes that have already been visited
+            # --------------------------------------------------
 
             if target in visited:
                 continue
 
-            # ----------------------------------------------
-            # Preserve which original seed led here
-            # ----------------------------------------------
+
+            # --------------------------------------------------
+            # Preserve original seed
+            # --------------------------------------------------
 
             edge["hop"] = hop
+
             edge["root_seed"] = root_seed[source]
 
             next_candidates.append(edge)
@@ -213,12 +228,12 @@ for hop in range(1, MAX_HOPS + 1):
 
 
     # ------------------------------------------------------
-    # Remove duplicate targets
-    #
-    # Keep the strongest incoming evidence for each target.
+    # If multiple sources reach the same target,
+    # keep the strongest relationship.
     # ------------------------------------------------------
 
     best_by_target = {}
+
 
     for edge in next_candidates:
 
@@ -226,8 +241,8 @@ for hop in range(1, MAX_HOPS + 1):
 
         if (
             target not in best_by_target
-            or edge["strength"] >
-               best_by_target[target]["strength"]
+            or edge["strength"]
+               > best_by_target[target]["strength"]
         ):
             best_by_target[target] = edge
 
@@ -238,11 +253,9 @@ for hop in range(1, MAX_HOPS + 1):
 
 
     # ------------------------------------------------------
-    # Rank candidates before MAX_FRONTIER
+    # Rank before applying MAX_FRONTIER
     #
-    # This is important:
-    # we do NOT arbitrarily truncate the frontier.
-    # Stronger graph evidence gets priority.
+    # Stronger relationships get priority.
     # ------------------------------------------------------
 
     next_candidates.sort(
@@ -251,38 +264,64 @@ for hop in range(1, MAX_HOPS + 1):
 
 
     # ------------------------------------------------------
-    # Keep only the strongest MAX_FRONTIER nodes
+    # Keep strongest MAX_FRONTIER nodes
     # ------------------------------------------------------
 
     next_candidates = next_candidates[:MAX_FRONTIER]
 
 
     # ------------------------------------------------------
-    # Save edges and prepare next frontier
+    # Save discovered edges
     # ------------------------------------------------------
 
-    traversed_edges.extend(next_candidates)
+    traversed_edges.extend(
+        next_candidates
+    )
+
+
+    # ------------------------------------------------------
+    # Create next frontier
+    # ------------------------------------------------------
 
     frontier = {
         edge["target"]
         for edge in next_candidates
     }
 
+
     hop_nodes[hop] = set(frontier)
 
 
     # ------------------------------------------------------
-    # Print hop summary
+    # Print hop information
     # ------------------------------------------------------
 
-    print(f"Nodes expanded        : {len(hop_nodes[hop - 1])}")
-    print(f"New edges discovered   : {len(next_candidates)}")
-    print(f"Next frontier size     : {len(frontier)}")
+    print(
+        f"Nodes expanded        : "
+        f"{len(hop_nodes[hop - 1])}"
+    )
+
+    print(
+        f"New edges discovered   : "
+        f"{len(next_candidates)}"
+    )
+
+    print(
+        f"Next frontier size     : "
+        f"{len(frontier)}"
+    )
+
+
+    # ------------------------------------------------------
+    # Show sample relationships
+    # ------------------------------------------------------
 
     if next_candidates:
 
         print()
         print("Sample discovered relationships:")
+        print("-" * 80)
+
 
         for edge in next_candidates[:10]:
 
@@ -300,6 +339,7 @@ for hop in range(1, MAX_HOPS + 1):
                 edge["predicate"]
             ).rsplit("/", 1)[-1]
 
+
             print(
                 f"  {source_label}"
                 f" --[{predicate_label}]--> "
@@ -309,11 +349,13 @@ for hop in range(1, MAX_HOPS + 1):
 
     else:
 
-        print("No new outgoing relationships found.")
+        print(
+            "No new outgoing relationships found."
+        )
 
 
 # ----------------------------------------------------------
-# 5. Final traversal summary
+# 7. Final traversal summary
 # ----------------------------------------------------------
 
 print()
@@ -327,6 +369,7 @@ print(f"Maximum frontier       : {MAX_FRONTIER}")
 print(f"Maximum edges          : {MAX_EDGES}")
 print(f"Edges collected        : {len(traversed_edges)}")
 
+
 for hop in sorted(hop_nodes):
 
     print(
@@ -336,35 +379,45 @@ for hop in sorted(hop_nodes):
 
 
 # ----------------------------------------------------------
-# 6. Build traversal DataFrame
+# 8. Build traversal DataFrame
 # ----------------------------------------------------------
 
 if traversed_edges:
 
     traversal_df = pd.DataFrame([
+
         {
             "hop": edge["hop"],
+
             "root_seed": node_label.get(
                 edge["root_seed"],
                 str(edge["root_seed"])
             ),
+
             "source": node_label.get(
                 edge["source"],
                 str(edge["source"])
             ),
+
             "predicate": str(
                 edge["predicate"]
             ).rsplit("/", 1)[-1],
+
             "target": node_label.get(
                 edge["target"],
                 str(edge["target"])
             ),
+
             "strength": edge["strength"],
+
             "link_type": edge["link_type"],
+
             "description": edge["description"]
         }
+
         for edge in traversed_edges
     ])
+
 
     print()
     print("TRAVERSAL EDGES")
@@ -389,7 +442,10 @@ else:
     traversal_df = pd.DataFrame()
 
     print()
-    print("⚠️ No outgoing graph relationships were discovered.")
+    print(
+        "⚠️ No outgoing graph relationships "
+        "were discovered."
+    )
 
 
 print()
