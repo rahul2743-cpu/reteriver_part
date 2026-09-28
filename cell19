@@ -1,0 +1,144 @@
+# ==========================================================
+# CELL 19 — QUERY -> CANDIDATE KG NODES
+#           (matching only, NO traversal yet)
+# ==========================================================
+
+import difflib
+
+print("=" * 80)
+print("QUERY -> KG CANDIDATE NODES")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# 0. Guards
+# ----------------------------------------------------------
+
+for _name in ("node_index", "node_bm25", "node_uris", "node_ref", "query_info",
+              "MATCH_CUTOFF", "N_CANDIDATES"):
+    assert _name in globals(), \
+        f"{_name} is not defined. Run Cells 13, 17 and 18 first."
+
+
+# ----------------------------------------------------------
+# 1. Helpers
+# ----------------------------------------------------------
+
+def fuzzy_token_match(query_token, label_token):
+    """Exact match, or spelling-tolerant match (difflib ratio >= MATCH_CUTOFF).
+    Numbers must match exactly; very short words are not fuzzy-matched."""
+
+    if query_token == label_token:
+        return True
+
+    if query_token.isdigit() or label_token.isdigit():
+        return False
+
+    if len(query_token) < 4 or len(label_token) < 4:
+        return False
+
+    ratio = difflib.SequenceMatcher(None, query_token, label_token).ratio()
+
+    return ratio * 100 >= MATCH_CUTOFF
+
+
+# label tokens (stop words removed) for every node, computed once
+label_tokens = [tokenize(lbl) for lbl in node_index["label"]]
+
+
+# ----------------------------------------------------------
+# 2. Score every node against the query
+#
+#    bm25       title + first words of the page, normalized 0..1
+#    title_cov  share of the node's TITLE words found in the query
+#               (exact or fuzzy)
+#    phrase     1 if a query phrase is inside the title, or the whole
+#               title is inside the question
+# ----------------------------------------------------------
+
+def find_candidate_nodes(query_info, top_n=N_CANDIDATES):
+
+    q_keywords = query_info["keywords"]
+    q_phrases  = query_info["phrases"]
+    q_norm     = f" {query_info['normalized_query']} "
+
+    bm25_raw = node_bm25.scores(q_keywords)
+    bm25_max = max(bm25_raw) if bm25_raw else 0.0
+
+    rows = []
+
+    for i, uri in enumerate(node_uris):
+
+        norm_label = node_index.at[i, "normalized_label"]
+        padded     = f" {norm_label} "
+
+        exact  = bool(norm_label) and padded in q_norm
+        phrase = exact or any(f" {p} " in padded for p in q_phrases)
+
+        ltoks = label_tokens[i]
+        matched = sum(
+            1 for lt in ltoks
+            if any(fuzzy_token_match(qt, lt) for qt in q_keywords)
+        )
+        title_cov = (matched / len(ltoks)) if ltoks else 0.0
+
+        bm25 = (bm25_raw[i] / bm25_max) if bm25_max > 0 else 0.0
+
+        if bm25 == 0 and title_cov == 0 and not phrase:
+            continue
+
+        score = 0.55 * bm25 + 0.30 * title_cov + 0.15 * float(phrase)
+
+        if exact:
+            score = min(1.0, score + 0.30)
+
+        rows.append({
+            "node":      uri,
+            "label":     node_index.at[i, "label"],
+            "score":     round(score, 4),
+            "bm25":      round(bm25, 4),
+            "title_cov": round(title_cov, 4),
+            "phrase":    int(phrase),
+            "match":     "exact_title" if exact else ("phrase" if phrase else "token/fuzzy"),
+            "node_type": node_index.at[i, "node_type"],
+            "has_text":  bool(node_index.at[i, "has_text"]),
+            "reference": node_ref.get(uri),
+        })
+
+    result = pd.DataFrame(rows)
+
+    if result.empty:
+        return result
+
+    # same score -> prefer the page that actually has text
+    return (
+        result
+        .sort_values(["score", "has_text"], ascending=[False, False])
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
+
+candidates = find_candidate_nodes(query_info)
+
+
+# ----------------------------------------------------------
+# 3. Show candidates
+# ----------------------------------------------------------
+
+print(f"Query    : {query_info['original_query']}")
+print(f"Keywords : {query_info['keywords']}")
+print()
+
+if candidates.empty:
+    print("No candidate nodes matched this query.")
+else:
+    print(f"Candidate KG nodes : {len(candidates)}")
+    display(
+        candidates[
+            ["label", "score", "bm25", "title_cov", "phrase",
+             "match", "node_type", "has_text", "reference"]
+        ]
+    )
+
+print()
+print("✅ Candidate matching done (no traversal yet).")
