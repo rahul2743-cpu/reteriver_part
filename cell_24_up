@@ -5,9 +5,6 @@
 import math
 import re
 import pandas as pd
-from collections import defaultdict
-
-from rdflib import URIRef, RDFS
 
 
 # ============================================================
@@ -24,211 +21,138 @@ OVERLAP_SIZE = 50
 # 2. VALIDATION
 # ============================================================
 
-required_vars = [
-    "document_results",
-    "g",
-]
-
-missing = [v for v in required_vars if v not in globals()]
-
-if missing:
+if "document_df" not in globals():
     raise RuntimeError(
-        f"Missing required variables: {missing}"
+        "Cell 23 output 'document_df' is not available. "
+        "Run Cell 23 first."
+    )
+
+if "g" not in globals():
+    raise RuntimeError(
+        "Knowledge Graph 'g' is not available."
     )
 
 
 # ============================================================
-# 3. GET DOCUMENT CONTENT
+# 3. CONVERT CELL 23 OUTPUT TO RECORDS
 # ============================================================
 
-def get_document_content(doc):
-    """
-    Extract document text from the document dictionary.
-    """
+source_documents = document_df.to_dict("records")
 
-    possible_fields = [
-        "content",
-        "document_content",
-        "chunk_content",
-        "text",
-        "documentContent"
-    ]
-
-    for field in possible_fields:
-        value = doc.get(field)
-
-        if value:
-            return str(value)
-
-    return ""
+if not source_documents:
+    raise RuntimeError(
+        "Cell 23 returned zero documents."
+    )
 
 
 # ============================================================
-# 4. GET HUMAN-READABLE DOCUMENT TITLE
+# 4. GET DOCUMENT TITLE
 # ============================================================
 
 def get_document_title(doc):
-    """
-    Get the human-readable title.
 
-    Priority:
-    1. Existing human-readable title
-    2. KG rdfs:label using document/reference URI
-    3. KG rdfs:label using title URI
-    4. Unknown Title
-    """
+    # Cell 23 already provides the human-readable title
+    if "document" in doc and pd.notna(doc["document"]):
+        return str(doc["document"]).strip()
 
-    KG_ENTITY_PREFIX = "http://knwbt.local/kg/entity/"
-
-    # --------------------------------------------------------
-    # 1. Check existing title fields
-    # --------------------------------------------------------
-
-    title_fields = [
+    # Fallbacks
+    for field in [
         "document_title",
         "source_title",
-        "label",
-        "title"
-    ]
-
-    for field in title_fields:
-
-        value = doc.get(field)
-
-        if value:
-
-            value = str(value).strip()
-
-            # If already a human-readable title
-            if value and not value.startswith(KG_ENTITY_PREFIX):
-                return value
-
-
-    # --------------------------------------------------------
-    # 2. Try document/reference URI → KG rdfs:label
-    # --------------------------------------------------------
-
-    reference_fields = [
-        "document_reference",
-        "reference",
-        "source_reference",
-        "sourceReference",
-        "source_node"
-    ]
-
-    for field in reference_fields:
-
-        value = doc.get(field)
-
-        if not value:
-            continue
-
-        try:
-
-            node = URIRef(str(value))
-
-            label = g.value(
-                node,
-                RDFS.label
-            )
-
-            if label:
-                return str(label).strip()
-
-        except Exception:
-            pass
-
-
-    # --------------------------------------------------------
-    # 3. If title itself is a KG URI → KG rdfs:label
-    # --------------------------------------------------------
-
-    for field in [
         "title",
-        "document_title"
+        "label"
     ]:
-
-        value = doc.get(field)
-
-        if not value:
-            continue
-
-        try:
-
-            value = str(value).strip()
-
-            if value.startswith(KG_ENTITY_PREFIX):
-
-                node = URIRef(value)
-
-                label = g.value(
-                    node,
-                    RDFS.label
-                )
-
-                if label:
-                    return str(label).strip()
-
-        except Exception:
-            pass
-
-
-    # --------------------------------------------------------
-    # 4. Final fallback
-    # --------------------------------------------------------
+        if field in doc and pd.notna(doc[field]):
+            return str(doc[field]).strip()
 
     return "Unknown Title"
 
 
 # ============================================================
-# 5. GET DOCUMENT REFERENCE
+# 5. GET DOCUMENT CONTENT
 # ============================================================
 
-def get_document_reference(doc):
+def get_document_content(doc):
 
     possible_fields = [
-        "document_reference",
-        "reference",
-        "source_reference",
-        "sourceReference",
-        "source_node"
+        "content",
+        "document_content",
+        "documentContent",
+        "chunk_content",
+        "text",
+        "content_with_titles"
     ]
 
     for field in possible_fields:
 
-        value = doc.get(field)
+        if field in doc and pd.notna(doc[field]):
 
-        if value:
-            return str(value)
+            value = str(doc[field]).strip()
+
+            if value:
+                return value
 
     return ""
 
 
 # ============================================================
-# 6. NORMALIZE TEXT
+# 6. GET DOCUMENT REFERENCE
+# ============================================================
+
+def get_document_reference(doc):
+
+    possible_fields = [
+        "reference",
+        "document_reference",
+        "source_reference",
+        "sourceReference",
+        "root_seed",
+        "evidence_source"
+    ]
+
+    for field in possible_fields:
+
+        if field in doc and pd.notna(doc[field]):
+
+            value = str(doc[field]).strip()
+
+            if value:
+                return value
+
+    return ""
+
+
+# ============================================================
+# 7. NORMALIZE TEXT
 # ============================================================
 
 def normalize_text(text):
 
-    if not text:
-        return ""
-
     text = str(text)
 
-    # Normalize line breaks
-    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(
+        r"\r\n?",
+        "\n",
+        text
+    )
 
-    # Remove excessive whitespace
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(
+        r"[ \t]+",
+        " ",
+        text
+    )
 
-    # Normalize multiple newlines
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(
+        r"\n{3,}",
+        "\n\n",
+        text
+    )
 
     return text.strip()
 
 
 # ============================================================
-# 7. SPLIT TEXT INTO SENTENCE-AWARE UNITS
+# 8. SENTENCE-AWARE SPLITTING
 # ============================================================
 
 def split_into_units(text, max_size):
@@ -237,10 +161,6 @@ def split_into_units(text, max_size):
 
     if not text:
         return []
-
-    # --------------------------------------------------------
-    # First split by paragraphs
-    # --------------------------------------------------------
 
     paragraphs = re.split(
         r"\n\s*\n",
@@ -256,10 +176,7 @@ def split_into_units(text, max_size):
         if not paragraph:
             continue
 
-        # ----------------------------------------------------
-        # Sentence split
-        # ----------------------------------------------------
-
+        # Sentence splitting
         sentences = re.split(
             r"(?<=[.!?])\s+",
             paragraph
@@ -272,19 +189,15 @@ def split_into_units(text, max_size):
             if not sentence:
                 continue
 
-            # ------------------------------------------------
-            # If sentence fits, keep it
-            # ------------------------------------------------
-
+            # Sentence fits
             if len(sentence) <= max_size:
 
                 units.append(sentence)
 
                 continue
 
-
             # ------------------------------------------------
-            # Sentence too large → split by clauses
+            # Large sentence → clause splitting
             # ------------------------------------------------
 
             clauses = re.split(
@@ -305,9 +218,8 @@ def split_into_units(text, max_size):
 
                     continue
 
-
                 # --------------------------------------------
-                # Clause still too large → word splitting
+                # Large clause → word-level splitting
                 # --------------------------------------------
 
                 words = clause.split()
@@ -320,25 +232,34 @@ def split_into_units(text, max_size):
 
                         current = word
 
-                    elif len(current) + 1 + len(word) <= max_size:
+                    elif (
+                        len(current)
+                        + 1
+                        + len(word)
+                        <= max_size
+                    ):
 
                         current += " " + word
 
                     else:
 
-                        units.append(current.strip())
+                        units.append(
+                            current.strip()
+                        )
 
                         current = word
 
                 if current:
-                    units.append(current.strip())
 
+                    units.append(
+                        current.strip()
+                    )
 
     return units
 
 
 # ============================================================
-# 8. CREATE SENTENCE-AWARE CHUNKS
+# 9. CREATE CHUNKS
 # ============================================================
 
 def create_chunks(
@@ -365,13 +286,16 @@ def create_chunks(
         unit_length = len(unit)
 
         # ----------------------------------------------------
-        # Add unit to current chunk
+        # Current chunk is full
         # ----------------------------------------------------
 
         if (
             current_units
             and
-            current_length + 1 + unit_length > chunk_size
+            current_length
+            + 1
+            + unit_length
+            > chunk_size
         ):
 
             chunk_text = " ".join(
@@ -381,21 +305,24 @@ def create_chunks(
             if chunk_text:
                 chunks.append(chunk_text)
 
-
             # ------------------------------------------------
-            # Create overlap using complete units
+            # Sentence-aware overlap
             # ------------------------------------------------
 
             overlap_units = []
-
             overlap_length = 0
 
-            for previous_unit in reversed(current_units):
+            for previous_unit in reversed(
+                current_units
+            ):
+
+                extra = (
+                    len(previous_unit)
+                    + (1 if overlap_units else 0)
+                )
 
                 if (
-                    overlap_length
-                    + len(previous_unit)
-                    + (1 if overlap_units else 0)
+                    overlap_length + extra
                     <= overlap_size
                 ):
 
@@ -404,17 +331,12 @@ def create_chunks(
                         previous_unit
                     )
 
-                    overlap_length = (
-                        overlap_length
-                        + len(previous_unit)
-                        + (1 if overlap_units else 0)
-                    )
+                    overlap_length += extra
 
                 else:
                     break
 
-
-            current_units = overlap_units.copy()
+            current_units = overlap_units
 
             current_length = sum(
                 len(x)
@@ -422,11 +344,13 @@ def create_chunks(
             )
 
             if current_units:
-                current_length += len(current_units) - 1
 
+                current_length += (
+                    len(current_units) - 1
+                )
 
         # ----------------------------------------------------
-        # Add current unit
+        # Add unit
         # ----------------------------------------------------
 
         current_units.append(unit)
@@ -434,14 +358,15 @@ def create_chunks(
         current_length = sum(
             len(x)
             for x in current_units
-        ) + max(
-            0,
+        )
+
+        current_length += (
             len(current_units) - 1
         )
 
 
     # --------------------------------------------------------
-    # Add final chunk
+    # Final chunk
     # --------------------------------------------------------
 
     if current_units:
@@ -455,7 +380,7 @@ def create_chunks(
 
 
     # --------------------------------------------------------
-    # Merge extremely small final chunks
+    # Merge very small chunks
     # --------------------------------------------------------
 
     merged_chunks = []
@@ -486,32 +411,7 @@ def create_chunks(
 
             merged_chunks.append(chunk)
 
-
     return merged_chunks
-
-
-# ============================================================
-# 9. GET GRAPH SCORE
-# ============================================================
-
-def get_graph_score(doc):
-
-    for field in [
-        "graph_score",
-        "graph_rank_score",
-        "_graph_evidence"
-    ]:
-
-        value = doc.get(field)
-
-        if value is not None:
-
-            try:
-                return float(value)
-            except:
-                pass
-
-    return 0.0
 
 
 # ============================================================
@@ -520,36 +420,50 @@ def get_graph_score(doc):
 
 documents = []
 
-for doc in document_results:
-
-    content = get_document_content(doc)
-
-    if not content:
-        continue
+for doc in source_documents:
 
     title = get_document_title(doc)
 
+    content = get_document_content(doc)
+
     reference = get_document_reference(doc)
 
-    graph_score = get_graph_score(doc)
+    if not content:
+        print(
+            f"WARNING: No content found for '{title}'"
+        )
+        continue
 
     documents.append({
+
         "title": title,
+
         "reference": reference,
+
         "content": normalize_text(content),
-        "graph_score": graph_score
+
+        "graph_score": float(
+            doc.get(
+                "graph_score",
+                0.0
+            )
+        )
     })
 
+
+# ============================================================
+# 11. VALIDATE DOCUMENT CONTENT
+# ============================================================
 
 if not documents:
 
     raise RuntimeError(
-        "No documents with content were found."
+        "No document content found in Cell 23 output."
     )
 
 
 # ============================================================
-# 11. CALCULATE TOTAL CONTENT SIZE
+# 12. CALCULATE CHUNK SIZE
 # ============================================================
 
 total_content_chars = sum(
@@ -557,11 +471,9 @@ total_content_chars = sum(
     for d in documents
 )
 
-
 calculated_chunk_size = math.ceil(
     total_content_chars / TARGET_CHUNKS
 )
-
 
 effective_chunk_size = min(
     MAX_CHUNK_SIZE,
@@ -573,7 +485,7 @@ effective_chunk_size = min(
 
 
 # ============================================================
-# 12. DISPLAY CONTENT INFORMATION
+# 13. DISPLAY CONTENT INFORMATION
 # ============================================================
 
 print("=" * 80)
@@ -613,7 +525,7 @@ print(
 
 
 # ============================================================
-# 13. CREATE ALL CANDIDATE CHUNKS
+# 14. CREATE CANDIDATE CHUNKS
 # ============================================================
 
 document_chunks = []
@@ -637,7 +549,7 @@ for document in documents:
             "document_title":
                 document["title"],
 
-            # Original KG reference
+            # Original reference
             "document_reference":
                 document["reference"],
 
@@ -645,15 +557,15 @@ for document in documents:
             "chunk_number":
                 chunk_number,
 
-            # Actual chunk
+            # Chunk text
             "chunk_text":
                 chunk_text,
 
-            # Size
+            # Character count
             "chunk_chars":
                 len(chunk_text),
 
-            # Graph evidence
+            # Graph score from Cell 23
             "graph_score":
                 document["graph_score"],
 
@@ -662,18 +574,17 @@ for document in documents:
             "resolution": None,
 
             # Tokens for Cell 25 MMR
-            "_tokens":
-                set(
-                    re.findall(
-                        r"\b[a-zA-Z0-9_]+\b",
-                        chunk_text.lower()
-                    )
+            "_tokens": set(
+                re.findall(
+                    r"\b[a-zA-Z0-9_]+\b",
+                    chunk_text.lower()
                 )
+            )
         })
 
 
 # ============================================================
-# 14. CHECK RESULT
+# 15. VALIDATE CHUNKS
 # ============================================================
 
 if not document_chunks:
@@ -684,7 +595,7 @@ if not document_chunks:
 
 
 # ============================================================
-# 15. CREATE DATAFRAME
+# 16. DATAFRAME
 # ============================================================
 
 chunks_df = pd.DataFrame(
@@ -693,7 +604,7 @@ chunks_df = pd.DataFrame(
 
 
 # ============================================================
-# 16. CHUNKING SUMMARY
+# 17. CHUNKING RESULT
 # ============================================================
 
 print("\n" + "=" * 80)
@@ -710,7 +621,7 @@ print(
 
 
 # ============================================================
-# 17. CHUNKS PER DOCUMENT
+# 18. CHUNKS PER DOCUMENT
 # ============================================================
 
 print("\nCHUNKS PER DOCUMENT")
@@ -733,7 +644,7 @@ print(
 
 
 # ============================================================
-# 18. CHUNK SIZE STATISTICS
+# 19. CHUNK SIZE STATISTICS
 # ============================================================
 
 print("\nCHUNK SIZE STATISTICS")
@@ -748,18 +659,18 @@ print(
 )
 
 print(
-    f"Average : {chunks_df['chunk_chars'].mean():.2f}"
+    f"Average : "
+    f"{chunks_df['chunk_chars'].mean():.2f}"
 )
 
 
 # ============================================================
-# 19. DISPLAY ALL CANDIDATE CHUNKS
+# 20. DISPLAY CANDIDATE CHUNKS
 # ============================================================
 
 print("\n" + "=" * 80)
 print("CANDIDATE CHUNKS")
 print("=" * 80)
-
 
 for _, row in chunks_df.iterrows():
 
@@ -789,7 +700,7 @@ for _, row in chunks_df.iterrows():
 
 
 # ============================================================
-# 20. FINAL CELL 24 OUTPUT
+# 21. COMPLETED
 # ============================================================
 
 print("\n" + "=" * 80)
