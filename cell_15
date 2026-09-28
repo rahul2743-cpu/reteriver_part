@@ -1,0 +1,192 @@
+# ==========================================================
+# CELL 15 — INSPECT RDF GRAPH
+# ==========================================================
+
+print("=" * 80)
+print("RDF GRAPH INSPECTION")
+print("=" * 80)
+
+
+# ----------------------------------------------------------
+# 1. Sample relationships
+#    This shows exactly what SPARQL traversal will follow.
+# ----------------------------------------------------------
+
+SAMPLE_QUERY = PREFIXES + """
+
+SELECT
+    ?source
+    ?sourceLabel
+    ?predicate
+    ?target
+    ?targetLabel
+    ?strength
+    ?linkType
+    ?description
+
+WHERE {
+
+    ?stmt a rdf:Statement ;
+
+          rdf:subject   ?source ;
+
+          rdf:predicate ?predicate ;
+
+          rdf:object    ?target ;
+
+          ex:strength    ?strength ;
+
+          ex:linkType    ?linkType ;
+
+          ex:description ?description .
+
+    OPTIONAL { ?source rdfs:label ?sourceLabel }
+
+    OPTIONAL { ?target rdfs:label ?targetLabel }
+
+}
+
+LIMIT 10
+"""
+
+sample_rows = list(g.query(SAMPLE_QUERY))
+
+for row in sample_rows:
+
+    print("SOURCE     :", row.sourceLabel)
+    print("             ", row.source)
+
+    print("PREDICATE  :", str(row.predicate).rsplit("/", 1)[-1])
+
+    print("TARGET     :", row.targetLabel)
+    print("             ", row.target)
+
+    print("STRENGTH   :", row.strength,
+          "| LINK TYPE:", row.linkType)
+
+    print("DESCRIPTION:", row.description)
+
+    print("-" * 80)
+
+
+# ----------------------------------------------------------
+# 2. Who has outgoing edges?
+#
+#    Traversal is OUTGOING only.
+#
+#    Example:
+#
+#    A → B → C
+#
+#    If A is the seed:
+#       Hop 1 = A → B
+#       Hop 2 = B → C
+#
+#    A is NOT expanded again at Hop 2.
+# ----------------------------------------------------------
+
+nodes_with_out = set(
+    g.objects(None, RDF.subject)
+)
+
+print()
+print("OUTGOING EDGE CHECK")
+
+print(
+    f"Nodes that HAVE outgoing edges        : "
+    f"{len(nodes_with_out)}"
+)
+
+print(
+    f"  document nodes                      : "
+    f"{len(nodes_with_out & docs)}"
+)
+
+print(
+    f"  title-only entity nodes             : "
+    f"{len(nodes_with_out - docs)}"
+)
+
+print(
+    f"Document nodes with NO outgoing edge  : "
+    f"{len(docs - nodes_with_out)}"
+)
+
+
+# ----------------------------------------------------------
+# 3. Out-degree per source node
+# ----------------------------------------------------------
+
+out_degree = defaultdict(int)
+
+for stmt in stmts:
+
+    source = g.value(stmt, RDF.subject)
+
+    if source is not None:
+        out_degree[source] += 1
+
+
+degrees = sorted(out_degree.values())
+
+if degrees:
+
+    print()
+    print("OUTGOING LINKS PER SOURCE NODE")
+
+    print(
+        f"min / median / max : "
+        f"{degrees[0]} / "
+        f"{degrees[len(degrees)//2]} / "
+        f"{degrees[-1]}"
+    )
+
+    print()
+    print("Top 5 source nodes by outgoing links:")
+
+    for uri, degree in sorted(
+        out_degree.items(),
+        key=lambda x: -x[1]
+    )[:5]:
+
+        print(
+            f"  {degree:3d}  "
+            f"{g.value(uri, RDFS.label)}"
+        )
+
+
+# ----------------------------------------------------------
+# 4. Relationship strength distribution
+#
+#    1  = weaker relationship
+#    10 = stronger / more central relationship
+#
+#    This helps us understand the effect of
+#    MIN_EDGE_STRENGTH in the retriever.
+# ----------------------------------------------------------
+
+strength_count = defaultdict(int)
+
+for stmt in stmts:
+
+    strength = g.value(stmt, EX.strength)
+
+    if strength is not None:
+
+        strength_count[int(strength)] += 1
+
+
+print()
+print("STRENGTH DISTRIBUTION")
+print("(1 = passing mention, 10 = central)")
+
+for strength in sorted(strength_count):
+
+    print(
+        f"  {strength:2d} : "
+        f"{strength_count[strength]}"
+    )
+
+
+print()
+print("✅ RDF structure inspected.")
