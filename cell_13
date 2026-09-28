@@ -1,0 +1,89 @@
+# ==========================================================
+# PART 3 — GRAPH RAG RETRIEVER
+# CELL 13 — RETRIEVER CONFIGURATION
+# ==========================================================
+
+import re
+import math
+from collections import defaultdict
+from rdflib import URIRef, RDF, RDFS, Namespace
+
+print("=" * 80)
+print("GRAPH RAG RETRIEVER")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# Question to test (change this for each run)
+# ----------------------------------------------------------
+
+QUERY = "What is meant by service operation in the context of Rolls-Royce product?"
+
+# ----------------------------------------------------------
+# RDF / SPARQL
+# ----------------------------------------------------------
+
+EX = Namespace("http://knwbt.local/kg/schema/")
+
+PREFIXES = """
+PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX ex:   <http://knwbt.local/kg/schema/>
+"""
+
+# ----------------------------------------------------------
+# Query -> KG matching
+# ----------------------------------------------------------
+
+MATCH_CUTOFF    = 72      # fuzzy match score (0-100) for spelling differences
+N_CANDIDATES    = 15      # candidate nodes kept after matching
+MAX_SEEDS       = 3       # start nodes for traversal
+SEED_REL_CUTOFF = 0.60    # a seed must score >= 60% of the best candidate
+
+TITLE_WEIGHT    = 3       # node title counts 3x in the node search text
+LEAD_WORDS      = 60      # first 60 words of a page are also searchable
+
+# ----------------------------------------------------------
+# Traversal (outgoing edges only)
+# ----------------------------------------------------------
+
+MAX_HOPS          = 2
+MAX_FRONTIER      = 60    # nodes carried from one hop to the next
+MAX_EDGES         = 400   # hard cap on edges examined
+HOP_DECAY         = 0.45  # hop 1 -> x1.0 , hop 2 -> x0.45
+MIN_EDGE_STRENGTH = 1     # raise to 5+ to ignore weak relationships
+
+# ----------------------------------------------------------
+# Document / Chunk retrieval
+# ----------------------------------------------------------
+
+CHUNK_SIZE     = 900      # characters per chunk
+MIN_CHUNK_SIZE = 120      # characters; smaller chunks are dropped
+TOP_K          = 10
+MAX_PER_DOC    = 3        # max chunks from one document in the Top-K
+
+# ----------------------------------------------------------
+# MMR (diversity)
+# ----------------------------------------------------------
+
+MMR_LAMBDA = 0.75         # 1.0 = only relevance, 0.0 = only diversity
+
+
+print(f"QUERY             : {QUERY}")
+print()
+print(f"MATCH_CUTOFF      : {MATCH_CUTOFF}")
+print(f"N_CANDIDATES      : {N_CANDIDATES}")
+print(f"MAX_SEEDS         : {MAX_SEEDS}")
+print(f"SEED_REL_CUTOFF   : {SEED_REL_CUTOFF}")
+print(f"MAX_HOPS          : {MAX_HOPS}")
+print(f"MAX_FRONTIER      : {MAX_FRONTIER}")
+print(f"MAX_EDGES         : {MAX_EDGES}")
+print(f"HOP_DECAY         : {HOP_DECAY}")
+print(f"MIN_EDGE_STRENGTH : {MIN_EDGE_STRENGTH}")
+print(f"CHUNK_SIZE        : {CHUNK_SIZE}")
+print(f"MIN_CHUNK_SIZE    : {MIN_CHUNK_SIZE}")
+print(f"TOP_K             : {TOP_K}")
+print(f"MAX_PER_DOC       : {MAX_PER_DOC}")
+print(f"MMR_LAMBDA        : {MMR_LAMBDA}")
+
+print()
+print("Retriever configuration loaded.")
