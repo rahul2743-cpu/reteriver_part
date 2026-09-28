@@ -1,0 +1,151 @@
+# ==========================================================
+# CELL 20 — SELECT FINAL KG SEEDS
+#           (from Cell 19 candidates)
+# ==========================================================
+
+print("=" * 80)
+print("KG SEED SELECTION")
+print("=" * 80)
+
+# ----------------------------------------------------------
+# 0. Guards
+# ----------------------------------------------------------
+
+for _name in (
+    "candidates",
+    "MAX_SEEDS",
+    "SEED_REL_CUTOFF",
+    "node_label"
+):
+    assert _name in globals(), \
+        f"{_name} is not defined. Run Cells 13, 18 and 19 first."
+
+
+# ----------------------------------------------------------
+# 1. Check candidate results
+# ----------------------------------------------------------
+
+if candidates.empty:
+
+    print("No candidate KG nodes available.")
+    seeds = []
+
+else:
+
+    # ------------------------------------------------------
+    # 2. Select candidates above the relative score threshold
+    #
+    #    Relative score is calculated against the best
+    #    candidate, so it is independent of the absolute
+    #    score scale.
+    # ------------------------------------------------------
+
+    best_score = float(
+        candidates["score"].max()
+    )
+
+    candidates = candidates.copy()
+
+    candidates["relative_score"] = (
+        candidates["score"] / best_score
+        if best_score > 0
+        else 0.0
+    )
+
+    eligible = candidates[
+        candidates["relative_score"] >= SEED_REL_CUTOFF
+    ].copy()
+
+
+    # ------------------------------------------------------
+    # 3. Select at most MAX_SEEDS
+    # ------------------------------------------------------
+
+    selected = (
+        eligible
+        .sort_values(
+            ["score", "has_text"],
+            ascending=[False, False]
+        )
+        .head(MAX_SEEDS)
+        .reset_index(drop=True)
+    )
+
+
+    # ------------------------------------------------------
+    # 4. Convert selected rows into seed records
+    # ------------------------------------------------------
+
+    seeds = []
+
+    for _, row in selected.iterrows():
+
+        seeds.append({
+            "node": URIRef(row["node"]),
+            "label": row["label"],
+            "score": float(row["score"]),
+            "relative_score": float(row["relative_score"]),
+            "match": row["match"],
+            "node_type": row["node_type"],
+            "has_text": bool(row["has_text"]),
+            "reference": row["reference"]
+        })
+
+
+# ----------------------------------------------------------
+# 5. Display selected seeds
+# ----------------------------------------------------------
+
+print()
+print(f"Candidate nodes received : {len(candidates)}")
+
+if not candidates.empty:
+    print(f"Best candidate score     : {candidates['score'].max():.4f}")
+
+print(f"Relative cutoff          : {SEED_REL_CUTOFF}")
+print(f"Maximum seeds            : {MAX_SEEDS}")
+print(f"Final seeds selected     : {len(seeds)}")
+
+
+if seeds:
+
+    print()
+    print("FINAL KG SEEDS")
+    print("-" * 80)
+
+    seed_df = pd.DataFrame([
+        {
+            "rank": i + 1,
+            "label": s["label"],
+            "score": round(s["score"], 4),
+            "relative_score": round(s["relative_score"], 4),
+            "match": s["match"],
+            "node_type": s["node_type"],
+            "has_text": s["has_text"],
+            "reference": s["reference"]
+        }
+        for i, s in enumerate(seeds)
+    ])
+
+    display(seed_df)
+
+else:
+
+    print()
+    print("⚠️ No KG seeds selected.")
+
+
+# ----------------------------------------------------------
+# 6. Validation
+# ----------------------------------------------------------
+
+assert len(seeds) <= MAX_SEEDS, \
+    "Number of seeds exceeds MAX_SEEDS."
+
+print()
+print("Selected seed nodes:")
+for i, seed in enumerate(seeds, start=1):
+    print(f"  {i}. {seed['label']}")
+
+print()
+print("✅ KG seed selection completed.")
