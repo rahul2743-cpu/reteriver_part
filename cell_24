@@ -1,13 +1,14 @@
 # ==========================================================
-# CELL 24 — DYNAMIC DOCUMENT CHUNKING
+# CELL 24 — DYNAMIC CHUNKING
 #           Retrieved Documents -> Candidate Chunks
 #
 # Goal:
-#   1. Use 250 chars normally
-#   2. Guarantee MIN_CHUNKS candidate chunks overall
-#   3. Use ONLY documents retrieved by Cell 23
-#   4. Do NOT add extra documents
-#   5. Do NOT duplicate chunks
+#   - Target at least 10 chunks
+#   - Maximum chunk size = 250 characters
+#   - Minimum chunk size = 80 characters
+#   - Number of chunks can be > 10
+#   - Do not add extra documents
+#   - Do not duplicate chunks
 # ==========================================================
 
 print("=" * 80)
@@ -21,9 +22,6 @@ print("=" * 80)
 
 for _name in (
     "retrieved_documents",
-    "CHUNK_SIZE",
-    "MIN_CHUNK_SIZE",
-    "MIN_CHUNKS",
     "tokenize"
 ):
     assert _name in globals(), \
@@ -31,7 +29,29 @@ for _name in (
 
 
 # ==========================================================
-# 2. CALCULATE TOTAL AVAILABLE CONTENT
+# 2. CHUNKING CONFIGURATION
+# ==========================================================
+
+TARGET_CHUNKS    = 10
+MAX_CHUNK_SIZE   = 250
+MIN_CHUNK_SIZE   = 80
+
+
+print()
+print("CHUNKING CONFIGURATION")
+print("-" * 80)
+
+print(f"Target chunks       : {TARGET_CHUNKS}")
+print(f"Maximum chunk size  : {MAX_CHUNK_SIZE}")
+print(f"Minimum chunk size  : {MIN_CHUNK_SIZE}")
+
+
+# ==========================================================
+# 3. CALCULATE TOTAL RETRIEVED CONTENT
+#
+# IMPORTANT:
+# Documents are NOT added here.
+# We only use documents already retrieved by Cell 23.
 # ==========================================================
 
 total_content_chars = sum(
@@ -39,8 +59,9 @@ total_content_chars = sum(
     for doc in retrieved_documents
 )
 
+
 print()
-print("CHUNKING REQUIREMENTS")
+print("RETRIEVED CONTENT")
 print("-" * 80)
 
 print(
@@ -49,72 +70,74 @@ print(
 )
 
 print(
-    f"Total content       : "
-    f"{total_content_chars} characters"
-)
-
-print(
-    f"Normal chunk size   : "
-    f"{CHUNK_SIZE} characters"
-)
-
-print(
-    f"Minimum chunks      : "
-    f"{MIN_CHUNKS}"
+    f"Total characters    : "
+    f"{total_content_chars}"
 )
 
 
 # ==========================================================
-# 3. DETERMINE CHUNK SIZE
+# 4. CALCULATE EFFECTIVE CHUNK SIZE
 #
-# Normal case:
-#     use CHUNK_SIZE = 250
+# Formula:
 #
-# If 250-char chunks cannot produce MIN_CHUNKS:
-#     reduce chunk size automatically.
+# total characters / target chunks
+#
+# Then constrain it between:
+#
+# MIN_CHUNK_SIZE and MAX_CHUNK_SIZE
 #
 # Example:
 #
-#     1068 chars / 250 ≈ 5 chunks
+# 1068 chars / 10 = 106.8
+# ceil = 107
 #
-#     Required = 10
+# Effective chunk size = 107
 #
-#     Dynamic size ≈ 1068 / 10 ≈ 106 chars
+# Example:
 #
+# 5000 chars / 10 = 500
+# Maximum = 250
+#
+# Effective chunk size = 250
 # ==========================================================
 
-if total_content_chars <= 0:
+if total_content_chars > 0:
 
-    effective_chunk_size = CHUNK_SIZE
+    calculated_chunk_size = math.ceil(
+        total_content_chars / TARGET_CHUNKS
+    )
+
+    effective_chunk_size = min(
+        MAX_CHUNK_SIZE,
+        max(
+            MIN_CHUNK_SIZE,
+            calculated_chunk_size
+        )
+    )
 
 else:
 
-    estimated_normal_chunks = math.ceil(
-        total_content_chars / CHUNK_SIZE
-    )
+    calculated_chunk_size = MAX_CHUNK_SIZE
+    effective_chunk_size = MAX_CHUNK_SIZE
 
-    if estimated_normal_chunks >= MIN_CHUNKS:
 
-        effective_chunk_size = CHUNK_SIZE
-
-    else:
-
-        effective_chunk_size = max(
-            MIN_CHUNK_SIZE,
-            math.floor(
-                total_content_chars / MIN_CHUNKS
-            )
-        )
-
+print()
+print("CHUNK SIZE CALCULATION")
+print("-" * 80)
 
 print(
-    f"Effective chunk size : "
-    f"{effective_chunk_size} characters"
+    f"Calculated chunk size : "
+    f"{calculated_chunk_size}"
+)
+
+print(
+    f"Effective chunk size  : "
+    f"{effective_chunk_size}"
 )
 
 
 # ==========================================================
-# 4. CHUNKING FUNCTION
+# 5. CHUNKING FUNCTION
 # ==========================================================
 
 def split_document_into_chunks(
@@ -123,12 +146,13 @@ def split_document_into_chunks(
     min_chunk_size=MIN_CHUNK_SIZE
 ):
     """
-    Split document into chunks.
+    Split document into chunks using the effective
+    chunk size.
 
     Rules:
     - Preserve paragraph boundaries where possible.
     - Split long paragraphs when necessary.
-    - Merge very small chunks where possible.
+    - Merge very small chunks when possible.
     - Never duplicate content.
     """
 
@@ -140,20 +164,27 @@ def split_document_into_chunks(
     if not text:
         return []
 
+
+    # ------------------------------------------------------
+    # Split into paragraphs
+    # ------------------------------------------------------
+
     paragraphs = [
         p.strip()
         for p in text.split("\n")
         if p.strip()
     ]
 
+
     chunks = []
     current = ""
 
-    for paragraph in paragraphs:
 
-        # --------------------------------------------------
-        # Add paragraph to current chunk if it fits
-        # --------------------------------------------------
+    # ------------------------------------------------------
+    # Build chunks
+    # ------------------------------------------------------
+
+    for paragraph in paragraphs:
 
         if (
             len(current)
@@ -174,6 +205,7 @@ def split_document_into_chunks(
 
             continue
 
+
         # --------------------------------------------------
         # Save current chunk
         # --------------------------------------------------
@@ -184,8 +216,9 @@ def split_document_into_chunks(
                 current.strip()
             )
 
+
         # --------------------------------------------------
-        # Paragraph itself is larger than chunk size
+        # Paragraph larger than chunk size
         # --------------------------------------------------
 
         if len(paragraph) > chunk_size:
@@ -194,10 +227,7 @@ def split_document_into_chunks(
 
             while start < len(paragraph):
 
-                end = (
-                    start
-                    + chunk_size
-                )
+                end = start + chunk_size
 
                 piece = (
                     paragraph[start:end]
@@ -268,14 +298,16 @@ def split_document_into_chunks(
                 chunk
             )
 
+
     return final_chunks
 
 
 # ==========================================================
-# 5. CREATE CHUNKS FROM RETRIEVED DOCUMENTS
+# 6. CREATE CHUNKS FOR ALL RETRIEVED DOCUMENTS
 # ==========================================================
 
 chunk_records = []
+
 
 for doc_rank, doc in enumerate(
     retrieved_documents,
@@ -286,13 +318,16 @@ for doc_rank, doc in enumerate(
         doc["content"] or ""
     ).strip()
 
+
     if not document_text:
         continue
+
 
     chunks = split_document_into_chunks(
         document_text,
         effective_chunk_size
     )
+
 
     for chunk_number, chunk_text in enumerate(
         chunks,
@@ -301,13 +336,23 @@ for doc_rank, doc in enumerate(
 
         chunk_records.append({
 
-            "document": doc["document"],
+            # ------------------------------------------
+            # Document information
+            # ------------------------------------------
+
+            "document":
+                doc["document"],
 
             "document_label":
                 doc["document_label"],
 
             "reference":
                 doc["reference"],
+
+
+            # ------------------------------------------
+            # Chunk information
+            # ------------------------------------------
 
             "chunk_id":
                 f"{doc_rank}_{chunk_number}",
@@ -321,8 +366,9 @@ for doc_rank, doc in enumerate(
             "chunk_chars":
                 len(chunk_text),
 
+
             # ------------------------------------------
-            # Graph evidence inherited from document
+            # Graph evidence
             # ------------------------------------------
 
             "graph_score":
@@ -358,7 +404,7 @@ for doc_rank, doc in enumerate(
 
 
 # ==========================================================
-# 6. CREATE DATAFRAME
+# 7. CREATE DATAFRAME
 # ==========================================================
 
 document_chunks = pd.DataFrame(
@@ -367,15 +413,13 @@ document_chunks = pd.DataFrame(
 
 
 # ==========================================================
-# 7. TOKENIZE CHUNKS
+# 8. TOKENIZE CHUNKS
 # ==========================================================
 
 if not document_chunks.empty:
 
     document_chunks["_tokens"] = (
-        document_chunks[
-            "chunk_text"
-        ]
+        document_chunks["chunk_text"]
         .apply(tokenize)
     )
 
@@ -385,7 +429,7 @@ else:
 
 
 # ==========================================================
-# 8. CHUNK SUMMARY
+# 9. CHUNK SUMMARY
 # ==========================================================
 
 print()
@@ -394,46 +438,41 @@ print("CHUNKING SUMMARY")
 print("=" * 80)
 
 print(
-    f"Retrieved documents     : "
+    f"Retrieved documents    : "
     f"{len(retrieved_documents)}"
 )
 
 print(
-    f"Total content           : "
+    f"Total content chars    : "
     f"{total_content_chars}"
 )
 
 print(
-    f"Normal chunk size       : "
-    f"{CHUNK_SIZE}"
-)
-
-print(
-    f"Effective chunk size    : "
+    f"Effective chunk size   : "
     f"{effective_chunk_size}"
 )
 
 print(
-    f"Minimum required chunks : "
-    f"{MIN_CHUNKS}"
+    f"Target chunks          : "
+    f"{TARGET_CHUNKS}"
 )
 
 print(
-    f"Actual chunks created   : "
+    f"Actual chunks created  : "
     f"{len(document_chunks)}"
 )
 
 
 # ==========================================================
-# 9. MINIMUM CHUNK CHECK
+# 10. MINIMUM CHUNK CHECK
 # ==========================================================
 
-if len(document_chunks) >= MIN_CHUNKS:
+if len(document_chunks) >= TARGET_CHUNKS:
 
     print()
     print(
-        f"✅ Minimum chunk requirement satisfied: "
-        f"{len(document_chunks)} >= {MIN_CHUNKS}"
+        f"✅ Minimum chunk target satisfied: "
+        f"{len(document_chunks)} >= {TARGET_CHUNKS}"
     )
 
 else:
@@ -441,17 +480,17 @@ else:
     print()
     print(
         f"⚠️ Only {len(document_chunks)} chunks "
-        f"could be created from the retrieved content."
+        f"were created."
     )
 
     print(
-        "No chunks were duplicated and no additional "
-        "documents were added."
+        "The retrieved content is too small to produce "
+        "10 chunks while respecting MIN_CHUNK_SIZE."
     )
 
 
 # ==========================================================
-# 10. DOCUMENT-WISE CHUNK DISTRIBUTION
+# 11. CHUNKS PER DOCUMENT
 # ==========================================================
 
 if not document_chunks.empty:
@@ -481,7 +520,7 @@ if not document_chunks.empty:
 
 
 # ==========================================================
-# 11. DISPLAY CHUNKS
+# 12. DISPLAY CHUNK METADATA
 # ==========================================================
 
 if not document_chunks.empty:
@@ -513,7 +552,7 @@ else:
 
 
 # ==========================================================
-# 12. SAMPLE CHUNK CONTENT
+# 13. SAMPLE CHUNK CONTENT
 # ==========================================================
 
 if not document_chunks.empty:
@@ -526,6 +565,7 @@ if not document_chunks.empty:
     for _, row in document_chunks.head(10).iterrows():
 
         print()
+
         print(
             f"Chunk ID  : "
             f"{row['chunk_id']}"
@@ -550,5 +590,5 @@ if not document_chunks.empty:
 
 print()
 print(
-    "✅ Dynamic document chunking completed."
+    "✅ Dynamic chunking completed."
 )
