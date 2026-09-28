@@ -1,0 +1,498 @@
+# ============================================================
+# CELL 25 — QUERY-BASED CHUNK RANKING + MMR
+# ============================================================
+
+import math
+import re
+import numpy as np
+import pandas as pd
+from collections import defaultdict, Counter
+
+print("=" * 70)
+print("CELL 25: QUERY-BASED CHUNK RANKING + MMR")
+print("=" * 70)
+
+# ------------------------------------------------------------
+# 1. VALIDATION
+# ------------------------------------------------------------
+
+if "document_chunks" not in globals():
+    raise RuntimeError(
+        "document_chunks not found. Run Cell 24 first."
+    )
+
+if "query_info" not in globals():
+    raise RuntimeError(
+        "query_info not found. Run the query preprocessing cells first."
+    )
+
+if "TOP_K" not in globals():
+    TOP_K = 10
+
+if "MMR_LAMBDA" not in globals():
+    MMR_LAMBDA = 0.75
+
+if "tokenize" not in globals():
+    raise RuntimeError(
+        "tokenize() function not found."
+    )
+
+if document_chunks.empty:
+    raise RuntimeError(
+        "document_chunks is empty. No candidate chunks available."
+    )
+
+
+# ------------------------------------------------------------
+# 2. QUERY
+# ------------------------------------------------------------
+
+original_query = query_info["original_query"]
+
+query_tokens = set(
+    tokenize(original_query)
+)
+
+print(f"\nQuery:")
+print(original_query)
+
+print(f"\nQuery tokens:")
+print(sorted(query_tokens))
+
+
+# ------------------------------------------------------------
+# 3. COPY CANDIDATE CHUNKS
+# ------------------------------------------------------------
+
+candidates = document_chunks.copy()
+
+print("\n" + "-" * 70)
+print(f"Candidate chunks received from Cell 24: {len(candidates)}")
+print(f"Candidate documents: {candidates['document_title'].nunique()}")
+print("-" * 70)
+
+
+# ------------------------------------------------------------
+# 4. MAKE SURE CHUNK NUMBER STARTS FROM 1
+# ------------------------------------------------------------
+
+# IMPORTANT:
+# User-facing chunk numbering starts from 1.
+#
+# Example:
+# Chunk 1
+# Chunk 2
+# ...
+# Chunk 10
+
+if "chunk_id" in candidates.columns:
+
+    # Convert existing IDs to strings first
+    candidates["chunk_id"] = candidates["chunk_id"].astype(str)
+
+    # Create a new display chunk number
+    candidates["chunk_number"] = (
+        candidates.groupby("document_title").cumcount() + 1
+    )
+
+else:
+
+    candidates["chunk_number"] = (
+        candidates.groupby("document_title").cumcount() + 1
+    )
+
+
+# ------------------------------------------------------------
+# 5. QUERY TOKEN COVERAGE
+# ------------------------------------------------------------
+
+def query_token_coverage(chunk_text, query_tokens):
+
+    if not query_tokens:
+        return 0.0
+
+    chunk_tokens = set(
+        tokenize(str(chunk_text))
+    )
+
+    matched_tokens = query_tokens.intersection(chunk_tokens)
+
+    return len(matched_tokens) / len(query_tokens)
+
+
+candidates["_query_coverage"] = candidates["chunk_text"].apply(
+    lambda x: query_token_coverage(
+        x,
+        query_tokens
+    )
+)
+
+
+# ------------------------------------------------------------
+# 6. SIMPLE CHUNK TERM-FREQUENCY SCORE
+# ------------------------------------------------------------
+
+def chunk_bm25_score(chunk_text, query_tokens):
+
+    if not query_tokens:
+        return 0.0
+
+    tokens = tokenize(str(chunk_text))
+
+    if not tokens:
+        return 0.0
+
+    token_counts = Counter(tokens)
+
+    score = 0.0
+
+    for term in query_tokens:
+
+        tf = token_counts.get(term, 0)
+
+        if tf > 0:
+            score += tf
+
+    # Normalize by chunk length
+    score = score / math.sqrt(len(tokens))
+
+    return score
+
+
+candidates["_bm25_raw"] = candidates["chunk_text"].apply(
+    lambda x: chunk_bm25_score(
+        x,
+        query_tokens
+    )
+)
+
+
+# ------------------------------------------------------------
+# 7. NORMALIZE QUERY TERM SCORE
+# ------------------------------------------------------------
+
+max_bm25 = candidates["_bm25_raw"].max()
+
+if max_bm25 > 0:
+
+    candidates["_bm25_norm"] = (
+        candidates["_bm25_raw"] / max_bm25
+    )
+
+else:
+
+    candidates["_bm25_norm"] = 0.0
+
+
+# ------------------------------------------------------------
+# 8. NORMALIZE GRAPH SCORE
+# ------------------------------------------------------------
+
+if "graph_score" in candidates.columns:
+
+    candidates["_graph_raw"] = pd.to_numeric(
+        candidates["graph_score"],
+        errors="coerce"
+    ).fillna(0.0)
+
+else:
+
+    candidates["_graph_raw"] = 0.0
+
+
+max_graph = candidates["_graph_raw"].max()
+
+if max_graph > 0:
+
+    candidates["_graph_norm"] = (
+        candidates["_graph_raw"] / max_graph
+    )
+
+else:
+
+    candidates["_graph_norm"] = 0.0
+
+
+# ------------------------------------------------------------
+# 9. QUERY RELEVANCE SCORE
+# ------------------------------------------------------------
+
+# 60% → Query token coverage
+# 40% → Term-frequency relevance
+
+candidates["_query_score"] = (
+    0.60 * candidates["_query_coverage"]
+    +
+    0.40 * candidates["_bm25_norm"]
+)
+
+
+# ------------------------------------------------------------
+# 10. FINAL RELEVANCE SCORE
+# ------------------------------------------------------------
+
+# 75% → Query relevance
+# 25% → Graph evidence
+
+candidates["_score"] = (
+    0.75 * candidates["_query_score"]
+    +
+    0.25 * candidates["_graph_norm"]
+)
+
+
+# ------------------------------------------------------------
+# 11. TOKEN SET FOR MMR
+# ------------------------------------------------------------
+
+candidates["_tokens"] = candidates["chunk_text"].apply(
+    lambda x: set(tokenize(str(x)))
+)
+
+
+# ------------------------------------------------------------
+# 12. INITIAL SORT
+# ------------------------------------------------------------
+
+candidates = candidates.sort_values(
+    "_score",
+    ascending=False
+).reset_index(drop=True)
+
+
+# ------------------------------------------------------------
+# 13. DYNAMIC MAX_PER_DOC
+# ------------------------------------------------------------
+
+num_documents = candidates["document_title"].nunique()
+
+if num_documents <= 2:
+
+    MAX_PER_DOC = 7
+
+elif num_documents <= 4:
+
+    MAX_PER_DOC = 5
+
+else:
+
+    MAX_PER_DOC = 3
+
+
+print("\n" + "-" * 70)
+print("DYNAMIC DOCUMENT LIMIT")
+print("-" * 70)
+
+print(f"Documents available : {num_documents}")
+print(f"MAX_PER_DOC         : {MAX_PER_DOC}")
+
+
+# ------------------------------------------------------------
+# 14. JACCARD SIMILARITY
+# ------------------------------------------------------------
+
+def jaccard_similarity(tokens_a, tokens_b):
+
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    intersection = len(
+        tokens_a.intersection(tokens_b)
+    )
+
+    union = len(
+        tokens_a.union(tokens_b)
+    )
+
+    if union == 0:
+        return 0.0
+
+    return intersection / union
+
+
+# ------------------------------------------------------------
+# 15. GREEDY MMR SELECTION
+# ------------------------------------------------------------
+
+remaining = candidates.copy()
+
+chosen = []
+
+per_doc = defaultdict(int)
+
+while len(chosen) < TOP_K and not remaining.empty:
+
+    best_index = None
+    best_mmr = -float("inf")
+
+    for idx, candidate in remaining.iterrows():
+
+        document_title = candidate["document_title"]
+
+        # --------------------------------------------
+        # Document limit
+        # --------------------------------------------
+
+        if per_doc[document_title] >= MAX_PER_DOC:
+            continue
+
+        # --------------------------------------------
+        # Redundancy
+        # --------------------------------------------
+
+        redundancy = 0.0
+
+        if chosen:
+
+            redundancy = max(
+                jaccard_similarity(
+                    candidate["_tokens"],
+                    selected["_tokens"]
+                )
+                for selected in chosen
+            )
+
+        # --------------------------------------------
+        # MMR
+        # --------------------------------------------
+
+        relevance = float(
+            candidate["_score"]
+        )
+
+        mmr_score = (
+            MMR_LAMBDA * relevance
+            -
+            (1 - MMR_LAMBDA) * redundancy
+        )
+
+        if mmr_score > best_mmr:
+
+            best_mmr = mmr_score
+            best_index = idx
+
+    # ------------------------------------------------
+    # No eligible candidate
+    # ------------------------------------------------
+
+    if best_index is None:
+        break
+
+    # ------------------------------------------------
+    # Select candidate
+    # ------------------------------------------------
+
+    selected = remaining.loc[best_index].copy()
+
+    selected["_mmr_score"] = best_mmr
+
+    chosen.append(selected)
+
+    document_title = selected["document_title"]
+
+    per_doc[document_title] += 1
+
+    # Remove selected candidate
+    remaining = remaining.drop(
+        index=best_index
+    )
+
+
+# ------------------------------------------------------------
+# 16. FINAL TOP-K DATAFRAME
+# ------------------------------------------------------------
+
+if chosen:
+
+    final_chunks = pd.DataFrame(
+        chosen
+    ).reset_index(drop=True)
+
+    # FINAL RANK starts from 1
+    final_chunks["rank"] = (
+        final_chunks.index + 1
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Chunk number displayed to user starts from 1
+    # --------------------------------------------------------
+
+    final_chunks["chunk_number"] = (
+        final_chunks.groupby("document_title").cumcount() + 1
+    )
+
+else:
+
+    final_chunks = pd.DataFrame()
+
+
+# ------------------------------------------------------------
+# 17. OUTPUT SUMMARY
+# ------------------------------------------------------------
+
+print("\n" + "=" * 70)
+print("CELL 25 RESULT")
+print("=" * 70)
+
+print(f"Query                     : {original_query}")
+print(f"Candidate chunks          : {len(candidates)}")
+print(f"Candidate documents       : {num_documents}")
+print(f"Dynamic MAX_PER_DOC       : {MAX_PER_DOC}")
+print(f"MMR Lambda                : {MMR_LAMBDA}")
+print(f"Final chunks selected     : {len(final_chunks)}")
+
+
+# ------------------------------------------------------------
+# 18. DISPLAY RANKING TABLE
+# ------------------------------------------------------------
+
+if not final_chunks.empty:
+
+    display_columns = [
+        "rank",
+        "document_title",
+        "chunk_number",
+        "_query_score",
+        "_graph_norm",
+        "_score",
+        "_mmr_score"
+    ]
+
+    display_columns = [
+        c for c in display_columns
+        if c in final_chunks.columns
+    ]
+
+    display(
+        final_chunks[display_columns]
+    )
+
+
+# ------------------------------------------------------------
+# 19. DISPLAY FINAL CHUNK CONTENT
+# ------------------------------------------------------------
+
+print("\n" + "=" * 70)
+print("FINAL TOP CHUNKS")
+print("=" * 70)
+
+for _, row in final_chunks.iterrows():
+
+    print("\n" + "-" * 70)
+
+    print(
+        f"Rank {int(row['rank'])} | "
+        f"Document: {row['document_title']} | "
+        f"Chunk {int(row['chunk_number'])}"
+    )
+
+    print("-" * 70)
+
+    print(
+        str(row["chunk_text"])
+    )
+
+print("\n" + "=" * 70)
+print("CELL 25 COMPLETED")
+print("=" * 70)
