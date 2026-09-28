@@ -1,0 +1,168 @@
+# ============================================================
+# CELL 27 — KG-RAG RESPONSE GENERATION
+# ============================================================
+
+print("=" * 80)
+print("CELL 27: KG-RAG RESPONSE GENERATION")
+print("=" * 80)
+
+
+# ============================================================
+# 1. VALIDATION
+# ============================================================
+
+if "response_kg" not in globals():
+    raise RuntimeError(
+        "response_kg not found. Run Cell 26 first."
+    )
+
+if "query_info" not in globals():
+    raise RuntimeError(
+        "query_info not found."
+    )
+
+if "llm" not in globals():
+    raise RuntimeError(
+        "llm not found. Run your LLM configuration cell first."
+    )
+
+
+# ============================================================
+# 2. GET USER QUERY
+# ============================================================
+
+query = query_info["original_query"]
+
+print("\nQuery:")
+print(query)
+
+
+# ============================================================
+# 3. GET TOP-K CHUNKS FROM CELL 26
+# ============================================================
+
+chosen = (
+    response_kg[
+        "predictions"
+    ][0]["data"]
+)
+
+
+if not chosen:
+    raise RuntimeError(
+        "No retrieved chunks available."
+    )
+
+
+print(
+    f"\nRetrieved chunks for context: "
+    f"{len(chosen)}"
+)
+
+
+# ============================================================
+# 4. PREPARE CONTEXT
+# ============================================================
+
+context_parts = []
+
+
+for i, chunk in enumerate(
+    chosen,
+    start=1
+):
+
+    title = chunk.get(
+        "title",
+        ""
+    )
+
+    reference = chunk.get(
+        "reference",
+        ""
+    )
+
+    content = chunk.get(
+        "content",
+        ""
+    )
+
+
+    context_parts.append(
+        f"""
+--- CONTEXT CHUNK {i} ---
+Title: {title}
+Reference: {reference}
+
+Content:
+{content}
+"""
+    )
+
+
+# Combine all chunks
+context = "\n".join(
+    context_parts
+)
+
+
+# ============================================================
+# 5. BUILD PROMPT
+# ============================================================
+
+prompt = f"""
+You are a Knowledge Graph Retrieval-Augmented Generation
+(KG-RAG) assistant.
+
+Answer the user's question using ONLY the retrieved
+context provided below.
+
+USER QUESTION:
+{query}
+
+RETRIEVED CONTEXT:
+{context}
+
+INSTRUCTIONS:
+
+1. Answer the user's question directly.
+2. Use only information present in the retrieved context.
+3. Do not introduce information from outside the context.
+4. Do not make up or assume facts.
+5. Combine information from multiple chunks when necessary.
+6. Remove repetitive information caused by chunk overlap.
+7. Give a clear and meaningful answer.
+8. If the retrieved context does not contain enough
+   information to answer the question, say so clearly.
+
+FINAL ANSWER:
+"""
+
+
+# ============================================================
+# 6. CALL EXISTING LLM
+# ============================================================
+
+response = llm.invoke(
+    prompt
+)
+
+
+# ============================================================
+# 7. EXTRACT ANSWER
+# ============================================================
+
+final_answer = response.content
+
+
+# ============================================================
+# 8. DISPLAY FINAL RESPONSE
+# ============================================================
+
+print("\n" + "=" * 80)
+print("FINAL KG-RAG RESPONSE")
+print("=" * 80)
+
+print(final_answer)
+
+print("=" * 80)
