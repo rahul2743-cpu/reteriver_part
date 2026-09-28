@@ -1,0 +1,169 @@
+# ============================================================
+# CELL 26 — FINAL TOP-K KG RESPONSE
+# ============================================================
+
+import json
+
+print("=" * 80)
+print("CELL 26: FINAL TOP-K KG CHUNKS")
+print("=" * 80)
+
+
+# ============================================================
+# 1. VALIDATION
+# ============================================================
+
+if "final_chunks" not in globals():
+    raise RuntimeError(
+        "final_chunks not found. Run Cell 25 first."
+    )
+
+if final_chunks.empty:
+    raise RuntimeError(
+        "final_chunks is empty. No chunks available."
+    )
+
+
+# ============================================================
+# 2. BUILD CHOSEN CHUNKS
+# ============================================================
+
+chosen = []
+
+for _, row in final_chunks.iterrows():
+
+    # --------------------------------------------------------
+    # Content
+    # --------------------------------------------------------
+
+    content = str(
+        row.get(
+            "chunk_text",
+            ""
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Title
+    # --------------------------------------------------------
+
+    title = str(
+        row.get(
+            "document_title",
+            ""
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Reference
+    # --------------------------------------------------------
+
+    reference = str(
+        row.get(
+            "document_reference",
+            ""
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Graph evidence
+    #
+    # Prefer original graph_score.
+    # If unavailable, use normalized graph score.
+    # --------------------------------------------------------
+
+    if "graph_score" in row.index:
+
+        graph_evidence = float(
+            row["graph_score"]
+        )
+
+    elif "_graph_norm" in row.index:
+
+        graph_evidence = float(
+            row["_graph_norm"]
+        )
+
+    else:
+
+        graph_evidence = 0.0
+
+
+    # --------------------------------------------------------
+    # Store in required format
+    # --------------------------------------------------------
+
+    chosen.append({
+
+        "content": content,
+
+        "title": title,
+
+        "reference": reference,
+
+        "_graph_evidence": graph_evidence
+    })
+
+
+# ============================================================
+# 3. CREATE RESPONSE KG
+# ============================================================
+
+response_kg = {
+    "predictions": [{
+        "data": [
+            {
+                "content": c["content"],
+                "title": c["title"],
+                "reference": c["reference"]
+            }
+            for c in chosen
+        ]
+    }]
+}
+
+
+# ============================================================
+# 4. PRINT SUMMARY
+# ============================================================
+
+print(
+    f"Response KG: {len(chosen)} chunk(s)"
+)
+
+print("-" * 80)
+
+
+# ============================================================
+# 5. PRINT TOP-K CHUNKS
+# ============================================================
+
+for i, c in enumerate(
+    chosen,
+    1
+):
+
+    print(
+        f"{i:2d}. "
+        f"[graph {c['_graph_evidence']:.4f}]  "
+        f"{c['title'][:58]}"
+    )
+
+
+print("-" * 80)
+
+
+# ============================================================
+# 6. PRINT JSON RESPONSE
+# ============================================================
+
+print(
+    json.dumps(
+        response_kg,
+        indent=2,
+        ensure_ascii=False
+    )
+)
