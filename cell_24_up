@@ -1,10 +1,27 @@
 # ============================================================
-# CELL 24 — DYNAMIC SENTENCE-AWARE CHUNKING
+# CELL 24 — DYNAMIC SENTENCE-AWARE CHUNKING WITH OVERLAP
 # ============================================================
+
+# Purpose:
+#   - Take documents retrieved by Cell 23
+#   - Dynamically calculate chunk size
+#   - Split text using sentence/clause boundaries
+#   - Preserve meaningful sentences
+#   - Use sentence-aware overlap
+#   - Keep the ACTUAL document title
+#   - Remove KG URI / hash from displayed title
+#   - NEVER generate "Document 1", "Document 2", etc.
+# ============================================================
+
 
 import math
 import re
 import pandas as pd
+
+
+print("=" * 70)
+print("CELL 24: DYNAMIC CHUNKING WITH 50-CHARACTER OVERLAP")
+print("=" * 70)
 
 
 # ============================================================
@@ -12,8 +29,11 @@ import pandas as pd
 # ============================================================
 
 TARGET_CHUNKS = 10
+
 MAX_CHUNK_SIZE = 250
 MIN_CHUNK_SIZE = 80
+
+# Target overlap between consecutive chunks
 OVERLAP_SIZE = 50
 
 
@@ -21,127 +41,277 @@ OVERLAP_SIZE = 50
 # 2. VALIDATION
 # ============================================================
 
-if "document_df" not in globals():
+if "retrieved_documents" not in globals():
     raise RuntimeError(
-        "Cell 23 output 'document_df' is not available. "
-        "Run Cell 23 first."
+        "retrieved_documents not found. Run Cell 23 first."
     )
 
-if "g" not in globals():
+if not retrieved_documents:
     raise RuntimeError(
-        "Knowledge Graph 'g' is not available."
+        "No documents were retrieved from Cell 23."
     )
 
-
-# ============================================================
-# 3. CONVERT CELL 23 OUTPUT TO RECORDS
-# ============================================================
-
-source_documents = document_df.to_dict("records")
-
-if not source_documents:
+if "tokenize" not in globals():
     raise RuntimeError(
-        "Cell 23 returned zero documents."
+        "tokenize() function not found."
+    )
+
+if OVERLAP_SIZE >= MAX_CHUNK_SIZE:
+    raise ValueError(
+        "OVERLAP_SIZE must be smaller than MAX_CHUNK_SIZE."
     )
 
 
 # ============================================================
-# 4. GET DOCUMENT TITLE
+# 3. GET DOCUMENT CONTENT
+# ============================================================
+
+def get_document_content(doc):
+
+    possible_columns = [
+        "content",
+        "document_content",
+        "text",
+        "content_with_titles"
+    ]
+
+    for col in possible_columns:
+
+        if col in doc:
+
+            value = doc[col]
+
+            if value is not None:
+
+                value = str(value).strip()
+
+                if value:
+                    return value
+
+    return ""
+
+
+# ============================================================
+# 4. GET ACTUAL DOCUMENT TITLE
 # ============================================================
 
 def get_document_title(doc):
 
-    # Cell 23 already provides the human-readable title
-    if "document" in doc and pd.notna(doc["document"]):
-        return str(doc["document"]).strip()
+    KG_PREFIX = "http://knwbt.local/kg/entity/"
 
-    # Fallbacks
-    for field in [
+    possible_title_fields = [
+        "title",
         "document_title",
         "source_title",
-        "title",
-        "label"
-    ]:
-        if field in doc and pd.notna(doc[field]):
-            return str(doc[field]).strip()
+        "label",
+        "source",
+        "document",
+        "name"
+    ]
+
+    for field in possible_title_fields:
+
+        if field not in doc:
+            continue
+
+        value = doc[field]
+
+        if value is None:
+            continue
+
+        value = str(value).strip()
+
+        if not value:
+            continue
+
+
+        # ----------------------------------------------------
+        # CASE 1:
+        # Value is a KG entity URI
+        #
+        # Example:
+        # http://knwbt.local/kg/entity/
+        # Service_operation_826ccdf
+        #
+        # Output:
+        # Service operation
+        # ----------------------------------------------------
+
+        if value.startswith(KG_PREFIX):
+
+            # Get final part of URI
+            title = value.rstrip("/").split("/")[-1]
+
+            # Remove generated hexadecimal hash
+            #
+            # Example:
+            # Service_operation_826ccdf
+            #
+            # becomes:
+            # Service_operation
+            title = re.sub(
+                r"_[0-9a-fA-F]{6,}$",
+                "",
+                title
+            )
+
+            # Remove "_intranet" suffix
+            #
+            # Example:
+            # Capability_intranet
+            #
+            # becomes:
+            # Capability
+            title = re.sub(
+                r"_intranet$",
+                "",
+                title,
+                flags=re.IGNORECASE
+            )
+
+            # Convert underscores to spaces
+            title = title.replace("_", " ")
+
+            # Convert multiple spaces to one
+            title = re.sub(
+                r"\s+",
+                " ",
+                title
+            ).strip()
+
+            if title:
+                return title
+
+
+        # ----------------------------------------------------
+        # CASE 2:
+        # Value is already a normal human-readable title
+        #
+        # Example:
+        # Service operation
+        #
+        # Keep it unchanged.
+        # ----------------------------------------------------
+
+        return value
+
+
+    # --------------------------------------------------------
+    # CASE 3:
+    # No direct title field
+    #
+    # Try reference fields.
+    # --------------------------------------------------------
+
+    possible_reference_fields = [
+        "reference",
+        "source_reference",
+        "sourceReference",
+        "source_node"
+    ]
+
+    for field in possible_reference_fields:
+
+        if field not in doc:
+            continue
+
+        value = doc[field]
+
+        if value is None:
+            continue
+
+        value = str(value).strip()
+
+        if not value:
+            continue
+
+
+        # ----------------------------------------------------
+        # If reference is a KG URI
+        # ----------------------------------------------------
+
+        if value.startswith(KG_PREFIX):
+
+            title = value.rstrip("/").split("/")[-1]
+
+            # Remove hash
+            title = re.sub(
+                r"_[0-9a-fA-F]{6,}$",
+                "",
+                title
+            )
+
+            # Remove intranet suffix
+            title = re.sub(
+                r"_intranet$",
+                "",
+                title,
+                flags=re.IGNORECASE
+            )
+
+            # Convert underscores to spaces
+            title = title.replace("_", " ")
+
+            title = re.sub(
+                r"\s+",
+                " ",
+                title
+            ).strip()
+
+            if title:
+                return title
+
+
+        # ----------------------------------------------------
+        # Normal reference
+        # ----------------------------------------------------
+
+        cleaned = value.rstrip("/")
+
+        if "/" in cleaned:
+            candidate = cleaned.rsplit("/", 1)[-1]
+        else:
+            candidate = cleaned
+
+        candidate = candidate.replace("_", " ")
+        candidate = candidate.replace("-", " ")
+
+        candidate = re.sub(
+            r"\s+",
+            " ",
+            candidate
+        ).strip()
+
+        if candidate:
+            return candidate
+
 
     return "Unknown Title"
 
 
 # ============================================================
-# 5. GET DOCUMENT CONTENT
-# ============================================================
-
-def get_document_content(doc):
-
-    possible_fields = [
-        "content",
-        "document_content",
-        "documentContent",
-        "chunk_content",
-        "text",
-        "content_with_titles"
-    ]
-
-    for field in possible_fields:
-
-        if field in doc and pd.notna(doc[field]):
-
-            value = str(doc[field]).strip()
-
-            if value:
-                return value
-
-    return ""
-
-
-# ============================================================
-# 6. GET DOCUMENT REFERENCE
-# ============================================================
-
-def get_document_reference(doc):
-
-    possible_fields = [
-        "reference",
-        "document_reference",
-        "source_reference",
-        "sourceReference",
-        "root_seed",
-        "evidence_source"
-    ]
-
-    for field in possible_fields:
-
-        if field in doc and pd.notna(doc[field]):
-
-            value = str(doc[field]).strip()
-
-            if value:
-                return value
-
-    return ""
-
-
-# ============================================================
-# 7. NORMALIZE TEXT
+# 5. NORMALIZE TEXT
 # ============================================================
 
 def normalize_text(text):
 
     text = str(text)
 
+    # Normalize line breaks
     text = re.sub(
         r"\r\n?",
         "\n",
         text
     )
 
+    # Normalize spaces
     text = re.sub(
         r"[ \t]+",
         " ",
         text
     )
 
+    # Remove excessive blank lines
     text = re.sub(
         r"\n{3,}",
         "\n\n",
@@ -152,15 +322,20 @@ def normalize_text(text):
 
 
 # ============================================================
-# 8. SENTENCE-AWARE SPLITTING
+# 6. SPLIT LONG TEXT INTO MEANINGFUL UNITS
 # ============================================================
 
-def split_into_units(text, max_size):
+def split_into_units(text):
 
     text = normalize_text(text)
 
     if not text:
         return []
+
+
+    # --------------------------------------------------------
+    # First: split paragraphs
+    # --------------------------------------------------------
 
     paragraphs = re.split(
         r"\n\s*\n",
@@ -169,6 +344,7 @@ def split_into_units(text, max_size):
 
     units = []
 
+
     for paragraph in paragraphs:
 
         paragraph = paragraph.strip()
@@ -176,11 +352,16 @@ def split_into_units(text, max_size):
         if not paragraph:
             continue
 
-        # Sentence splitting
+
+        # ----------------------------------------------------
+        # Split paragraph into sentences
+        # ----------------------------------------------------
+
         sentences = re.split(
             r"(?<=[.!?])\s+",
             paragraph
         )
+
 
         for sentence in sentences:
 
@@ -189,21 +370,30 @@ def split_into_units(text, max_size):
             if not sentence:
                 continue
 
-            # Sentence fits
-            if len(sentence) <= max_size:
+
+            # ------------------------------------------------
+            # Sentence fits inside maximum size
+            # ------------------------------------------------
+
+            if len(sentence) <= MAX_CHUNK_SIZE:
 
                 units.append(sentence)
 
                 continue
 
+
             # ------------------------------------------------
-            # Large sentence → clause splitting
+            # Long sentence
+            # Split at clause boundaries first
             # ------------------------------------------------
 
             clauses = re.split(
                 r"(?<=[,;:])\s+",
                 sentence
             )
+
+            current_clause = ""
+
 
             for clause in clauses:
 
@@ -212,186 +402,289 @@ def split_into_units(text, max_size):
                 if not clause:
                     continue
 
-                if len(clause) <= max_size:
 
-                    units.append(clause)
+                if not current_clause:
+
+                    current_clause = clause
 
                     continue
 
-                # --------------------------------------------
-                # Large clause → word-level splitting
-                # --------------------------------------------
 
-                words = clause.split()
+                proposed = (
+                    current_clause
+                    + " "
+                    + clause
+                )
 
-                current = ""
 
-                for word in words:
+                if len(proposed) <= MAX_CHUNK_SIZE:
 
-                    if not current:
+                    current_clause = proposed
 
-                        current = word
-
-                    elif (
-                        len(current)
-                        + 1
-                        + len(word)
-                        <= max_size
-                    ):
-
-                        current += " " + word
-
-                    else:
-
-                        units.append(
-                            current.strip()
-                        )
-
-                        current = word
-
-                if current:
+                else:
 
                     units.append(
-                        current.strip()
+                        current_clause.strip()
                     )
+
+                    current_clause = clause
+
+
+            if current_clause:
+
+
+                # ------------------------------------------------
+                # If a single clause is still too long,
+                # split by words rather than characters.
+                # ------------------------------------------------
+
+                if len(current_clause) <= MAX_CHUNK_SIZE:
+
+                    units.append(
+                        current_clause.strip()
+                    )
+
+                else:
+
+                    words = current_clause.split()
+
+                    word_buffer = ""
+
+
+                    for word in words:
+
+                        if not word_buffer:
+
+                            word_buffer = word
+
+                            continue
+
+
+                        proposed = (
+                            word_buffer
+                            + " "
+                            + word
+                        )
+
+
+                        if len(proposed) <= MAX_CHUNK_SIZE:
+
+                            word_buffer = proposed
+
+                        else:
+
+                            if word_buffer:
+
+                                units.append(
+                                    word_buffer.strip()
+                                )
+
+                            word_buffer = word
+
+
+                    if word_buffer:
+
+                        units.append(
+                            word_buffer.strip()
+                        )
+
 
     return units
 
 
 # ============================================================
-# 9. CREATE CHUNKS
+# 7. BUILD SENTENCE-AWARE CHUNKS
 # ============================================================
 
 def create_chunks(
     text,
-    chunk_size,
+    target_size,
     overlap_size
 ):
 
-    units = split_into_units(
-        text,
-        chunk_size
-    )
+    units = split_into_units(text)
 
     if not units:
         return []
+
 
     chunks = []
 
     current_units = []
     current_length = 0
 
+
     for unit in units:
 
         unit_length = len(unit)
 
+
         # ----------------------------------------------------
-        # Current chunk is full
+        # Add first unit
         # ----------------------------------------------------
 
-        if (
-            current_units
-            and
+        if not current_units:
+
+            current_units = [unit]
+
+            current_length = unit_length
+
+            continue
+
+
+        proposed_length = (
             current_length
             + 1
             + unit_length
-            > chunk_size
-        ):
-
-            chunk_text = " ".join(
-                current_units
-            ).strip()
-
-            if chunk_text:
-                chunks.append(chunk_text)
-
-            # ------------------------------------------------
-            # Sentence-aware overlap
-            # ------------------------------------------------
-
-            overlap_units = []
-            overlap_length = 0
-
-            for previous_unit in reversed(
-                current_units
-            ):
-
-                extra = (
-                    len(previous_unit)
-                    + (1 if overlap_units else 0)
-                )
-
-                if (
-                    overlap_length + extra
-                    <= overlap_size
-                ):
-
-                    overlap_units.insert(
-                        0,
-                        previous_unit
-                    )
-
-                    overlap_length += extra
-
-                else:
-                    break
-
-            current_units = overlap_units
-
-            current_length = sum(
-                len(x)
-                for x in current_units
-            )
-
-            if current_units:
-
-                current_length += (
-                    len(current_units) - 1
-                )
-
-        # ----------------------------------------------------
-        # Add unit
-        # ----------------------------------------------------
-
-        current_units.append(unit)
-
-        current_length = sum(
-            len(x)
-            for x in current_units
-        )
-
-        current_length += (
-            len(current_units) - 1
         )
 
 
-    # --------------------------------------------------------
-    # Final chunk
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Unit fits
+        # ----------------------------------------------------
 
-    if current_units:
+        if proposed_length <= target_size:
+
+            current_units.append(unit)
+
+            current_length = proposed_length
+
+            continue
+
+
+        # ----------------------------------------------------
+        # Current chunk is complete
+        # ----------------------------------------------------
 
         chunk_text = " ".join(
             current_units
         ).strip()
 
+
         if chunk_text:
-            chunks.append(chunk_text)
+
+            chunks.append(
+                chunk_text
+            )
 
 
-    # --------------------------------------------------------
-    # Merge very small chunks
-    # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Create overlap from previous chunk
+        #
+        # IMPORTANT:
+        # Complete units/sentences are used.
+        # No arbitrary character cutting.
+        # ----------------------------------------------------
+
+        overlap_units = []
+
+        overlap_length = 0
+
+
+        for previous_unit in reversed(
+            current_units
+        ):
+
+            additional_length = (
+                len(previous_unit)
+                if not overlap_units
+                else len(previous_unit) + 1
+            )
+
+
+            if (
+                overlap_length
+                + additional_length
+                <= overlap_size
+            ):
+
+                overlap_units.insert(
+                    0,
+                    previous_unit
+                )
+
+                overlap_length += (
+                    additional_length
+                )
+
+            else:
+
+                break
+
+
+        # ----------------------------------------------------
+        # Start new chunk with overlap
+        # ----------------------------------------------------
+
+        current_units = (
+            overlap_units
+            + [unit]
+        )
+
+        current_length = len(
+            " ".join(current_units)
+        )
+
+
+        # ----------------------------------------------------
+        # Safety:
+        # If overlap + new unit exceeds target,
+        # remove overlap units until it fits.
+        # ----------------------------------------------------
+
+        while (
+            current_units
+            and
+            current_length > target_size
+        ):
+
+            # Keep newest unit
+            if len(current_units) == 1:
+                break
+
+            current_units.pop(0)
+
+            current_length = len(
+                " ".join(current_units)
+            )
+
+
+    # ========================================================
+    # FINAL CHUNK
+    # ========================================================
+
+    if current_units:
+
+        final_chunk = " ".join(
+            current_units
+        ).strip()
+
+        if final_chunk:
+
+            chunks.append(
+                final_chunk
+            )
+
+
+    # ========================================================
+    # MERGE VERY SMALL FINAL CHUNKS
+    # ========================================================
 
     merged_chunks = []
 
+
     for chunk in chunks:
 
-        if (
-            merged_chunks
-            and
-            len(chunk) < MIN_CHUNK_SIZE
-        ):
+        if not merged_chunks:
+
+            merged_chunks.append(
+                chunk
+            )
+
+            continue
+
+
+        if len(chunk) < MIN_CHUNK_SIZE:
 
             combined = (
                 merged_chunks[-1]
@@ -399,81 +692,68 @@ def create_chunks(
                 + chunk
             )
 
+
+            # Only merge if maximum size is respected
             if len(combined) <= MAX_CHUNK_SIZE:
 
                 merged_chunks[-1] = combined
 
             else:
 
-                merged_chunks.append(chunk)
+                merged_chunks.append(
+                    chunk
+                )
 
         else:
 
-            merged_chunks.append(chunk)
+            merged_chunks.append(
+                chunk
+            )
+
 
     return merged_chunks
 
 
 # ============================================================
-# 10. PREPARE DOCUMENTS
+# 8. CALCULATE TOTAL CONTENT SIZE
 # ============================================================
 
-documents = []
+total_content_chars = 0
 
-for doc in source_documents:
 
-    title = get_document_title(doc)
+for doc in retrieved_documents:
 
     content = get_document_content(doc)
 
-    reference = get_document_reference(doc)
-
-    if not content:
-        print(
-            f"WARNING: No content found for '{title}'"
-        )
-        continue
-
-    documents.append({
-
-        "title": title,
-
-        "reference": reference,
-
-        "content": normalize_text(content),
-
-        "graph_score": float(
-            doc.get(
-                "graph_score",
-                0.0
-            )
-        )
-    })
+    total_content_chars += len(content)
 
 
-# ============================================================
-# 11. VALIDATE DOCUMENT CONTENT
-# ============================================================
-
-if not documents:
-
-    raise RuntimeError(
-        "No document content found in Cell 23 output."
-    )
+print("\n" + "-" * 70)
+print("CONTENT INFORMATION")
+print("-" * 70)
 
 
-# ============================================================
-# 12. CALCULATE CHUNK SIZE
-# ============================================================
-
-total_content_chars = sum(
-    len(d["content"])
-    for d in documents
+print(
+    f"Documents retrieved : "
+    f"{len(retrieved_documents)}"
 )
+
+
+print(
+    f"Total content chars : "
+    f"{total_content_chars}"
+)
+
+
+# ============================================================
+# 9. CALCULATE EFFECTIVE CHUNK SIZE
+# ============================================================
 
 calculated_chunk_size = math.ceil(
-    total_content_chars / TARGET_CHUNKS
+    total_content_chars /
+    TARGET_CHUNKS
 )
+
 
 effective_chunk_size = min(
     MAX_CHUNK_SIZE,
@@ -484,225 +764,300 @@ effective_chunk_size = min(
 )
 
 
-# ============================================================
-# 13. DISPLAY CONTENT INFORMATION
-# ============================================================
-
-print("=" * 80)
-print("CELL 24: DYNAMIC CHUNKING WITH 50-CHARACTER OVERLAP")
-print("=" * 80)
-
-print("\nCONTENT INFORMATION")
-print("-" * 80)
-
 print(
-    f"Documents retrieved     : {len(documents)}"
+    f"Calculated chunk size : "
+    f"{calculated_chunk_size}"
 )
 
-print(
-    f"Total content chars     : {total_content_chars}"
-)
 
 print(
-    f"Calculated chunk size   : {calculated_chunk_size}"
+    f"Effective chunk size  : "
+    f"{effective_chunk_size}"
 )
 
-print(
-    f"Effective chunk size    : {effective_chunk_size}"
-)
 
 print(
-    f"Maximum chunk size      : {MAX_CHUNK_SIZE}"
+    f"Maximum chunk size    : "
+    f"{MAX_CHUNK_SIZE}"
 )
 
-print(
-    f"Minimum chunk size      : {MIN_CHUNK_SIZE}"
-)
 
 print(
-    f"Overlap size            : {OVERLAP_SIZE}"
+    f"Minimum chunk size    : "
+    f"{MIN_CHUNK_SIZE}"
+)
+
+
+print(
+    f"Overlap size          : "
+    f"{OVERLAP_SIZE}"
 )
 
 
 # ============================================================
-# 14. CREATE CANDIDATE CHUNKS
+# 10. CREATE DOCUMENT CHUNKS
 # ============================================================
 
-document_chunks = []
+document_chunks_list = []
 
-for document in documents:
+
+for doc in retrieved_documents:
+
+    content = get_document_content(doc)
+
+    if not content:
+        continue
+
+
+    # --------------------------------------------------------
+    # Create chunks
+    # --------------------------------------------------------
 
     chunks = create_chunks(
-        document["content"],
+        content,
         effective_chunk_size,
         OVERLAP_SIZE
     )
+
+
+    # --------------------------------------------------------
+    # Document metadata
+    # --------------------------------------------------------
+
+    document_title = get_document_title(doc)
+
+
+    document_reference = (
+        doc.get(
+            "reference",
+            doc.get(
+                "source_reference",
+                doc.get(
+                    "sourceReference",
+                    ""
+                )
+            )
+        )
+    )
+
+
+    graph_score = doc.get(
+        "graph_score",
+        0.0
+    )
+
+
+    hop = doc.get(
+        "hop",
+        None
+    )
+
+
+    resolution = doc.get(
+        "resolution",
+        ""
+    )
+
+
+    # --------------------------------------------------------
+    # Store chunks
+    # --------------------------------------------------------
 
     for chunk_number, chunk_text in enumerate(
         chunks,
         start=1
     ):
 
-        document_chunks.append({
+        document_chunks_list.append({
 
-            # Human-readable title
             "document_title":
-                document["title"],
+                document_title,
 
-            # Original reference
             "document_reference":
-                document["reference"],
+                document_reference,
 
-            # Chunk number starts from 1
+            # Starts from 1
             "chunk_number":
                 chunk_number,
 
-            # Chunk text
             "chunk_text":
                 chunk_text,
 
-            # Character count
             "chunk_chars":
                 len(chunk_text),
 
-            # Graph score from Cell 23
             "graph_score":
-                document["graph_score"],
+                graph_score,
 
-            # Compatibility fields
-            "hop": None,
-            "resolution": None,
+            "hop":
+                hop,
 
-            # Tokens for Cell 25 MMR
-            "_tokens": set(
-                re.findall(
-                    r"\b[a-zA-Z0-9_]+\b",
-                    chunk_text.lower()
-                )
-            )
+            "resolution":
+                resolution
         })
 
 
 # ============================================================
-# 15. VALIDATE CHUNKS
+# 11. CREATE DATAFRAME
 # ============================================================
 
-if not document_chunks:
-
-    raise RuntimeError(
-        "Chunking produced zero candidate chunks."
-    )
-
-
-# ============================================================
-# 16. DATAFRAME
-# ============================================================
-
-chunks_df = pd.DataFrame(
-    document_chunks
+document_chunks = pd.DataFrame(
+    document_chunks_list
 )
 
 
 # ============================================================
-# 17. CHUNKING RESULT
+# 12. TOKENIZE
 # ============================================================
 
-print("\n" + "=" * 80)
+if not document_chunks.empty:
+
+    document_chunks["_tokens"] = (
+        document_chunks["chunk_text"]
+        .apply(
+            lambda x:
+            set(
+                tokenize(
+                    str(x)
+                )
+            )
+        )
+    )
+
+
+# ============================================================
+# 13. OUTPUT SUMMARY
+# ============================================================
+
+print("\n" + "=" * 70)
 print("CHUNKING RESULT")
-print("=" * 80)
-
-print(
-    f"Documents processed : {len(documents)}"
-)
-
-print(
-    f"Candidate chunks    : {len(document_chunks)}"
-)
+print("=" * 70)
 
 
-# ============================================================
-# 18. CHUNKS PER DOCUMENT
-# ============================================================
+if document_chunks.empty:
 
-print("\nCHUNKS PER DOCUMENT")
-print("-" * 80)
+    print("No chunks were created.")
 
-chunks_per_document = (
-    chunks_df
-    .groupby("document_title")
-    .size()
-    .reset_index(
-        name="chunk_count"
+else:
+
+    print(
+        f"Documents processed : "
+        f"{document_chunks['document_title'].nunique()}"
     )
-)
 
-print(
-    chunks_per_document.to_string(
-        index=False
+
+    print(
+        f"Candidate chunks    : "
+        f"{len(document_chunks)}"
     )
-)
 
 
 # ============================================================
-# 19. CHUNK SIZE STATISTICS
+# 14. CHUNKS PER DOCUMENT
 # ============================================================
 
-print("\nCHUNK SIZE STATISTICS")
-print("-" * 80)
+if not document_chunks.empty:
 
-print(
-    f"Minimum : {chunks_df['chunk_chars'].min()}"
-)
+    print("\n" + "-" * 70)
+    print("CHUNKS PER DOCUMENT")
+    print("-" * 70)
 
-print(
-    f"Maximum : {chunks_df['chunk_chars'].max()}"
-)
 
-print(
-    f"Average : "
-    f"{chunks_df['chunk_chars'].mean():.2f}"
-)
+    distribution = (
+        document_chunks
+        .groupby("document_title")
+        .size()
+        .reset_index(
+            name="chunk_count"
+        )
+    )
+
+
+    display(
+        distribution
+    )
 
 
 # ============================================================
-# 20. DISPLAY CANDIDATE CHUNKS
+# 15. CHUNK SIZE STATISTICS
 # ============================================================
 
-print("\n" + "=" * 80)
+if not document_chunks.empty:
+
+    print("\n" + "-" * 70)
+    print("CHUNK SIZE STATISTICS")
+    print("-" * 70)
+
+
+    print(
+        f"Minimum chunk chars : "
+        f"{document_chunks['chunk_chars'].min()}"
+    )
+
+
+    print(
+        f"Maximum chunk chars : "
+        f"{document_chunks['chunk_chars'].max()}"
+    )
+
+
+    print(
+        f"Average chunk chars : "
+        f"{document_chunks['chunk_chars'].mean():.1f}"
+    )
+
+
+# ============================================================
+# 16. DISPLAY CANDIDATE CHUNKS
+# ============================================================
+
+print("\n" + "=" * 70)
 print("CANDIDATE CHUNKS")
-print("=" * 80)
+print("=" * 70)
 
-for _, row in chunks_df.iterrows():
 
-    print("\n" + "-" * 80)
+if not document_chunks.empty:
 
-    print(
-        f"Title: {row['document_title']}"
-    )
+    for _, row in document_chunks.iterrows():
 
-    print(
-        f"Reference: {row['document_reference']}"
-    )
+        print("\n" + "-" * 70)
 
-    print(
-        f"Chunk {row['chunk_number']}"
-    )
 
-    print(
-        f"Characters: {row['chunk_chars']}"
-    )
+        print(
+            f"Title: "
+            f"{row['document_title']}"
+        )
 
-    print()
 
-    print(
-        row["chunk_text"]
-    )
+        print(
+            f"Reference: "
+            f"{row['document_reference']}"
+        )
+
+
+        print(
+            f"Chunk {int(row['chunk_number'])}"
+        )
+
+
+        print(
+            f"Characters: "
+            f"{row['chunk_chars']}"
+        )
+
+
+        print("-" * 70)
+
+
+        print(
+            row["chunk_text"]
+        )
 
 
 # ============================================================
-# 21. COMPLETED
+# 17. COMPLETED
 # ============================================================
 
-print("\n" + "=" * 80)
+print("\n" + "=" * 70)
 print("CELL 24 COMPLETED")
-print("=" * 80)
+print("=" * 70)
